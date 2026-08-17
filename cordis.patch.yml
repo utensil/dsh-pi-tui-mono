@@ -18,10 +18,10 @@
 
 - insert:
     - id: tui-startup
-      name: '@dsh-pi/tui/startup'
+      name: 'dsh-pi-tui-shim/startup'
 
     - id: tui
-      name: '@dsh-pi/tui'
+      name: 'dsh-pi-tui-shim'
       inject: [tuiStartup]
       config:
         sessionId: !!js ctx.tuiStartup.sessionId

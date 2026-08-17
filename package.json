@@ -1,5 +1,5 @@
 {
-  "name": "@dsh-pi/tui",
+  "name": "dsh-pi-tui-shim",
   "version": "0.1.0",
   "description": "pi-TUI front door for DeepSeek Harness — dsh agent runtime rendered by pi's actual InteractiveMode (update-proof: the look ships with pi).",
   "license": "MIT",
