@@ -16,6 +16,13 @@
         model: deepseek-v4-pro
         cwd: !!js process.cwd()
 
+# Full thinking at max effort (mirrors @dsh-tui/dsh-tui). Key and endpoint
+# resolve per request from the credentials store.
+- id: llm-deepseek
+  config:
+    thinking: enabled
+    reasoningEffort: max
+
 - insert:
     - id: tui-startup
       name: 'dsh-pi-tui-shim/startup'
