@@ -18,8 +18,8 @@ updates arrive without edits to this repo.
 ## Commit discipline
 
 - Use **git** (not jj).
-- **Author and committer** must both be the repository owner's GitHub identity
-  (`utensil <utensilcandel@gmail.com>`).
+- **Author and committer** must both be the repository owner's GitHub
+  identity (resolve via `gh api user --jq .login`).
 - Conventional commits: `feat:`, `fix:`, `refactor:`, `docs:`, `chore:`.
   Short title explaining the *why* + a description of *what* changed.
 - One logical change per commit; stage only files belonging to that change.
