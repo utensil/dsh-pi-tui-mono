@@ -10,10 +10,10 @@ the look is pi's, and it updates automatically whenever pi updates its TUI.
 
 ## Status
 
-⚠️ **Work in progress.** The bundle loads and composes over `@deepseek-ai/dsh-base`
-(milestone 0). The agent-event bridge (`InteractiveMode` ⇄ dsh agent-loop) is
-under active development. Until it lands, the profile boots but does not yet
-render turns.
+✅ **Working.** The bundle mounts pi's real `InteractiveMode` over the dsh
+agent-loop and renders live turns end-to-end: user input, assistant streaming,
+tool calls with result cards, multi-turn context, and persisted-session resume
+(`--resume <session-id>`). Verified interactively in a real terminal.
 
 ## Why not just use `@dsh-tui/dsh-tui`?
 
