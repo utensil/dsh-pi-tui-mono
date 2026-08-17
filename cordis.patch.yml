@@ -1,0 +1,27 @@
+# @dsh-pi/tui — pi's real TUI as the dsh front door.
+#
+# Rows registered over @deepseek-ai/dsh-base:
+#   - tui-startup  : parses dsh --profile tui-pi args, exposes ctx.tuiStartup.sessionId
+#   - tui          : mounts pi's InteractiveMode, bridged to the dsh agent-loop.
+#
+# agent-loop is repointed to the TUI's startup-owned session identity, mirroring
+# @dsh-tui/dsh-tui (patch replaces the row's whole config).
+
+- id: agent-loop
+  inject: [tuiStartup]
+  config:
+    agents:
+      - id: main
+        provider: deepseek-official
+        model: deepseek-v4-pro
+        cwd: !!js process.cwd()
+
+- insert:
+    - id: tui-startup
+      name: '@dsh-pi/tui/startup'
+
+    - id: tui
+      name: '@dsh-pi/tui'
+      inject: [tuiStartup]
+      config:
+        sessionId: !!js ctx.tuiStartup.sessionId
