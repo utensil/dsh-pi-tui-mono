@@ -178,6 +178,20 @@ verified live in the tui-pi profile:
   verified: a ```` ```lean ```` block renders with the preload's grammar
   (keyword/entity/number colors from the railscasts palette).
 
+## Render regression without a model (tmux)
+
+`scripts/test-tui-render.sh` boots the tui-pi profile with a **scripted
+transcript** — no model interaction at all. The tui plugin's TEST-ONLY
+`testTranscript` config replays dsh session events through
+`agent.session.append(type, data, {surfaceOp: "append"})` after boot (the same
+path the agent-loop uses, so the bridge translates them 1:1), and the TUI
+renders them. The script captures the pane and asserts the rendered
+artifacts: the mermaid box-drawing diagram (`├───▶`) and latex unicode
+(`∫`, `mc²`). Fixture: `test/fixtures/render-transcript.json`. Run:
+`scripts/test-tui-render.sh`. The regression suite (`pnpm test`) never calls a
+model: every test drives the bridge with crafted dsh events, fake agents, or
+local tool execution.
+
 ## dsh identity (not pi)
 
 - `PI_OFFLINE=1` suppresses pi's "Update Available / run pi update" popup and

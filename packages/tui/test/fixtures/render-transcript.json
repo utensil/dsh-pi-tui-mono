@@ -1,0 +1,30 @@
+[
+  {
+    "type": "turn/start",
+    "data": {}
+  },
+  {
+    "type": "user/message",
+    "data": {
+      "message": { "content": [{ "type": "text", "text": "Show a mermaid diagram and a formula." }] },
+      "source": { "kind": "user" }
+    }
+  },
+  {
+    "type": "assistant/message",
+    "data": {
+      "message": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Here is a mermaid diagram:\n```mermaid\ngraph LR\n  A --> B\n  B --> C\n```\n\nAnd a formula: $E = mc^2$ and a block:\n\n$$\n\\int_0^1 x^2 dx\n$$"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "turn/end",
+    "data": {}
+  }
+]

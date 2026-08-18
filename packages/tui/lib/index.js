@@ -2,7 +2,7 @@ import { InteractiveMode } from "@earendil-works/pi-coding-agent";
 import { SessionId } from "@deepseek-ai/dsh-session";
 import z from "@deepseek-ai/schemastery";
 import { createRequire } from "node:module";
-import { writeSync } from "node:fs";
+import { writeSync, readFileSync } from "node:fs";
 import { createRuntimeHost, formatResumeHint } from "./bridge.js";
 
 export { formatResumeHint };
@@ -68,6 +68,10 @@ export const Config = z.object({
   tuiMode: z.string(),
   fullscreenExitOutput: z.string(),
   mermaidRenderingMode: z.string(),
+  // TEST ONLY: path to a JSON array of {type, data} dsh session events to
+  // replay after boot (no model interaction) — used by the tmux render
+  // regression for mermaid/latex/… without touching a model.
+  testTranscript: z.string(),
 });
 
 /** Install a console-output buffer: while the front door is up, stray writes
@@ -153,6 +157,20 @@ export const apply = async (ctx, config) => {
   });
   const mode = new InteractiveMode(runtimeHost, {});
   await mode.init();
+  // TEST ONLY: replay a scripted transcript so tmux render regressions never
+  // need a model. The events go through agent.session.append, the same path
+  // dsh's own loop uses, so the bridge translates them 1:1.
+  if (config?.testTranscript) {
+    const transcript = JSON.parse(readFileSync(config.testTranscript, "utf8"));
+    for (const entry of transcript) {
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      try {
+        agent.session.append(entry.type, entry.data ?? {}, { surfaceOp: "append" });
+      } catch (err) {
+        console.log(`[@dsh-pi/tui] transcript event ${entry.type} failed: ${err?.message ?? err}`);
+      }
+    }
+  }
   // Route our own status line through the buffer: a direct stderr write at
   // boot lands inside the TUI frame (and, after a quit, inside the NEXT
   // session's input box). It flushes at quit with the other reports.
