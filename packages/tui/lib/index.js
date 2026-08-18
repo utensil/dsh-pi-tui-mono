@@ -2,6 +2,7 @@ import { InteractiveMode } from "@earendil-works/pi-coding-agent";
 import { SessionId } from "@deepseek-ai/dsh-session";
 import z from "@deepseek-ai/schemastery";
 import { createRequire } from "node:module";
+import { writeSync } from "node:fs";
 import { createRuntimeHost } from "./bridge.js";
 
 /** Honor node `--require=<path>` preloads from NODE_OPTIONS at front-door boot.
@@ -66,15 +67,19 @@ export const Config = z.object({
 });
 
 export const apply = async (ctx, config) => {
-  // The TUI owns stdout exclusively once InteractiveMode takes the screen.
-  // Anything printed to stdout after that (e.g. pi2dsh's deliberate
-  // console.log/console.warn mount reports) lands inside the input box and
-  // floods the cursor. Route console output to stderr for the lifetime of the
-  // front door; dsh's own logging already goes to the logger (stderr).
+  // The TUI owns the terminal exclusively once InteractiveMode takes the
+  // screen: any stray write — even to stderr, which is the raw terminal — lands
+  // inside the input box wherever the cursor happens to be. Plugin reports that
+  // deliberately use console.log/warn (pi2dsh's mount messages) are therefore
+  // BUFFERED while the front door is up and flushed to stderr on dispose, so
+  // the information is kept without corrupting the TUI. (Node's own crash
+  // traces bypass console.* and stay visible.)
+  const consoleBuffer = [];
   const consoleRedirects = ["log", "warn", "info", "debug", "error"].map((level) => {
     const original = console[level];
     console[level] = (...args) => {
-      process.stderr.write(`[console.${level}] ${args.map(String).join(" ")}\n`);
+      consoleBuffer.push(`[console.${level}] ${args.map(String).join(" ")}`);
+      if (consoleBuffer.length > 500) consoleBuffer.shift();
     };
     return [level, original];
   });
@@ -133,6 +138,11 @@ export const apply = async (ctx, config) => {
     runtimeHost.dispose();
     for (const [level, original] of consoleRedirects) {
       console[level] = original;
+    }
+    // Synchronous fd write: pi's quit path calls process.exit(0), which would
+    // drop buffered async stderr writes — the mount reports must survive.
+    if (consoleBuffer.length > 0) {
+      writeSync(2, `${consoleBuffer.join("\n")}\n`);
     }
   });
 

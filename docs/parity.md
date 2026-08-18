@@ -169,12 +169,13 @@ verified live in the tui-pi profile:
 - `getQuietStartup`/`getCollapseChangelog` → true hides the "pi vX" banner,
   startup hints, and the changelog notice. The TUI shell remains pi's (the
   design premise); the terminal title and hardcoded "pi" strings are inherited.
-- **stdout hygiene**: while the front door is up, `console.log`/`warn`/`info`/
-  `debug`/`error` are redirected to stderr (with a `[console.<level>]` prefix)
-  and restored on dispose. Without this, plugin reports that deliberately use
-  `console.log` (pi2dsh's mount messages) land inside the InteractiveMode
-  input box and flood the cursor out of it. Messages stay visible in the
-  process's stderr/log.
+- **Terminal hygiene**: while the front door is up, `console.log`/`warn`/
+  `info`/`debug`/`error` are BUFFERED (capped, flushed on dispose) and
+  restored after. Stray terminal writes — even to stderr, which is the raw
+  terminal — land inside the InteractiveMode input box wherever the cursor
+  is, so plugin reports that deliberately use `console.log` (pi2dsh's mount
+  messages) must never reach the terminal mid-session. The information is
+  kept in the buffered flush, the extensions registry, and the process log.
 
 This monorepo's packages each run `node --test` (`pnpm test` at the root).
 Coverage per package:
