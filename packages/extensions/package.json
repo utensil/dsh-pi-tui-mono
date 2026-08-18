@@ -31,6 +31,13 @@
     "pi-sidequest": "1.0.2",
     "pi-boomerang": "0.7.0",
     "pi-subagents": "0.50.0",
-    "pi-dynamic-workflows": "1.0.1"
+    "pi-dynamic-workflows": "1.0.1",
+    "@deepseek-ai/dsh-agent": "latest",
+    "@deepseek-ai/dsh-commands": "latest",
+    "@deepseek-ai/dsh-llm": "latest",
+    "@deepseek-ai/dsh-session": "latest",
+    "@deepseek-ai/dsh-skill-filesystem": "latest",
+    "@deepseek-ai/dsh-system-prompt": "latest",
+    "@deepseek-ai/dsh-tools": "latest"
   }
 }
