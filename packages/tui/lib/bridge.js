@@ -1,5 +1,5 @@
 /**
- * dsh-pi-tui-shim — a pi `AgentSession`-shaped shim over a dsh agent.
+ * @dsh-pi/tui bridge — a pi `AgentSession`-shaped bridge over a dsh agent.
  *
  * Translates the dsh agent event stream (cordis `session/event`) into the pi
  * session events that `InteractiveMode` renders (message_start / message_update
@@ -8,12 +8,16 @@
  *
  * The shapes follow `@earendil-works/pi-ai` (AssistantMessage / content blocks)
  * and `@earendil-works/pi-coding-agent` InteractiveMode's handleEvent contract.
+ *
+ * Model surfaces are deliberately neutral: the default model, the /model
+ * picklist, and the provider come from the bundle `Config` (or fall back to the
+ * dsh agent's own current model), never hardcoded here. `@dsh-pi/migrate`
+ * writes that config from an existing pi installation's settings.
  */
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
 import { installModelSelection } from "@deepseek-ai/dsh-agent";
-import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync, writeSync, mkdirSync, rmSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -23,18 +27,12 @@ import { createRequire } from "node:module";
 const textBlocks = (content) =>
   (content ?? []).filter((b) => b.type === "text").map((b) => b.text).join("\n\n");
 
-const DEFAULT_MODEL = "deepseek-v4-flash";
-const DEFAULT_MODEL_OBJECT = {
-  id: DEFAULT_MODEL,
-  provider: "deepseek",
-  name: "DeepSeek V4 Flash",
-};
-
-/** Models the /model command may select. */
-const AVAILABLE_MODELS = [
-  DEFAULT_MODEL_OBJECT,
-  { id: "deepseek-v4-pro", provider: "deepseek", name: "DeepSeek V4 Pro" },
-];
+/** The dsh resume command printed at TUI exit (pi's own formatResumeCommand
+ * cannot run: our shim reports sessions as non-persisted, and pi's generated
+ * command would say `pi --session ...`). */
+export function formatResumeHint(sessionId) {
+  return `To resume this session: dsh --profile tui-pi --resume ${sessionId}`;
+}
 
 /** Build a pi-shaped AssistantMessage with the given content blocks. */
 function assistantMessage(model, content, over = {}) {
@@ -43,7 +41,7 @@ function assistantMessage(model, content, over = {}) {
     content,
     api: "openai",
     provider: "openai",
-    model: typeof model === "string" ? model : (model?.id ?? DEFAULT_MODEL),
+    model: typeof model === "string" ? model : (model?.id ?? "unknown"),
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     stopReason: "stop",
     timestamp: Date.now(),
@@ -79,6 +77,85 @@ function translateDshContentBlock(block) {
 
 /** Directory of the local pi installation (the agent whose look we inherit). */
 const piAgentDir = () => join(homedir(), ".pi", "agent");
+/** Flat dir of pi-format session files the /resume picker reads. These are
+ * generated from dsh's own session storage so the picker lists DSH sessions
+ * (never pi's), and resuming one maps back to `dsh --resume <id>`. */
+const dshSessionsBridgeDir = (override) => override ?? join(homedir(), ".dsh", "sessions-bridge");
+/** dsh's persisted-session projection cache (id -> {identity, rows}). */
+const dshProjcachePath = (override) => override ?? join(homedir(), ".dsh", "storages", "session_projcache.json");
+
+/** Generate pi-format session files for dsh's persisted sessions so the
+ * /resume picker lists real dsh sessions (id + title from the projection
+ * cache), never pi's session files. Files are pruned when a session leaves
+ * the cache. The bridge dir is flat `*.jsonl`, one per session. */
+function writeSessionBridgeFiles(dir, sessions, current) {
+  if (!dir) return;
+  try {
+    mkdirSync(dir, { recursive: true });
+  } catch {
+    return;
+  }
+  const wanted = new Set();
+  const write = (id, cwd, title) => {
+    if (!id) return;
+    wanted.add(id);
+    const lines = [JSON.stringify({ type: "session", id, cwd, timestamp: Date.now() })];
+    if (title) lines.push(JSON.stringify({ type: "session_info", name: title }));
+    try {
+      writeFileSync(join(dir, `${id}.jsonl`), `${lines.join("\n")}\n`);
+    } catch {
+      /* best-effort */
+    }
+  };
+  for (const [id, entry] of Object.entries(sessions)) {
+    if (typeof id !== "string" || !id.startsWith("main-session-")) continue;
+    const identity = entry?.identity ?? {};
+    const title = entry?.rows?.title?.val;
+    write(id, identity.cwd, typeof title === "string" && title ? title : undefined);
+  }
+  // The CURRENT session is deliberately NOT written: until it has persisted
+  // storage it cannot be resumed (the dsh agent-loop refuses storage-less
+  // resume ids), and once it persists it appears here via the projection
+  // cache on the next boot.
+  if (current && sessions[current.id]) write(current.id, current.cwd, current.title);
+  // Prune files for sessions no longer in the cache.
+  try {
+    for (const f of readdirSync(dir)) {
+      if (!f.endsWith(".jsonl")) continue;
+      const id = f.slice(0, -".jsonl".length);
+      if (!wanted.has(id)) {
+        try {
+          rmSync(join(dir, f), { force: true });
+        } catch {
+          /* best-effort */
+        }
+      }
+    }
+  } catch {
+    /* best-effort */
+  }
+}
+
+/** Load dsh's projection cache: session id -> {identity, rows}. Never throws. */
+function loadDshSessions(projcachePath) {
+  try {
+    const cache = JSON.parse(readFileSync(projcachePath, "utf8"));
+    return cache?.tables?.sessions ?? {};
+  } catch {
+    return {};
+  }
+}
+
+/** The pi-format session id embedded in a bridge file (first line header). */
+export function sessionIdFromBridgeFile(path) {
+  try {
+    const first = readFileSync(path, "utf8").split("\n", 1)[0];
+    const header = JSON.parse(first);
+    return typeof header?.id === "string" ? header.id : undefined;
+  } catch {
+    return undefined;
+  }
+}
 const piThemeDir = (() => {
   try {
     // The pi package exports only the import condition; resolve it via ESM.
@@ -89,9 +166,10 @@ const piThemeDir = (() => {
   }
 })();
 
-/** Scan pi's custom + built-in themes into full Theme objects (via pi's own
- * loader, so the TUI's theme.fg/etc. work). */
-function loadPiThemes() {
+/** Scan migrated + pi's custom + built-in themes into full Theme objects (via
+ * pi's own loader, so the TUI's theme.fg/etc. work). A migrated themes dir
+ * (written by @dsh-pi/migrate) takes precedence over the live pi home. */
+function loadPiThemes(extraDir) {
   const themes = [];
   let loadThemeFromPath = null;
   try {
@@ -108,10 +186,11 @@ function loadPiThemes() {
       themes.push({ name: fallbackName, sourcePath });
     }
   };
-  const customDir = join(piAgentDir(), "themes");
-  if (existsSync(customDir)) {
-    for (const f of readdirSync(customDir).filter((n) => n.endsWith(".json"))) {
-      add(join(customDir, f), basename(f, ".json"));
+  for (const dir of [extraDir, join(piAgentDir(), "themes")]) {
+    if (dir && existsSync(dir)) {
+      for (const f of readdirSync(dir).filter((n) => n.endsWith(".json"))) {
+        add(join(dir, f), basename(f, ".json"));
+      }
     }
   }
   for (const n of ["dark", "light"]) {
@@ -121,13 +200,25 @@ function loadPiThemes() {
   return themes;
 }
 
-/** pi's selected theme from ~/.pi/agent/settings.json. */
-function piSelectedTheme() {
+/** The selected theme: bundle config (migrated) wins, else pi's settings. */
+function piSelectedTheme(preferred) {
+  if (typeof preferred === "string" && preferred) return preferred;
+  return piSettings().theme;
+}
+
+/** Read the local pi installation's settings.json (the agent whose look and
+ * behavior we inherit). Missing file or field -> undefined; never throws. */
+function piSettings() {
   try {
     const s = JSON.parse(readFileSync(join(piAgentDir(), "settings.json"), "utf8"));
-    return typeof s.theme === "string" && s.theme ? s.theme : undefined;
+    return {
+      theme: typeof s.theme === "string" && s.theme ? s.theme : undefined,
+      tuiMode: typeof s.tuiMode === "string" && s.tuiMode ? s.tuiMode : undefined,
+      fullscreenExitOutput: typeof s.fullscreenExitOutput === "string" && s.fullscreenExitOutput ? s.fullscreenExitOutput : undefined,
+      mermaidRenderingMode: typeof s.markdown?.mermaid === "string" && s.markdown.mermaid ? s.markdown.mermaid : undefined,
+    };
   } catch {
-    return undefined;
+    return {};
   }
 }
 
@@ -146,17 +237,39 @@ function loadPiContextFiles(cwd) {
   return parts.join("\n\n");
 }
 
-export function createPiSessionShim(ctx, agent, sessionId) {
+export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
   const dshSession = agent.session;
+  // Model surfaces are neutral: the bundle config (written by @dsh-pi/migrate)
+  // supplies the default model, the /model picklist, and the provider; without
+  // it we fall back to the dsh agent's own current model so nothing is
+  // hardcoded here.
+  const {
+    defaultModel,
+    availableModels = [],
+    provider = "deepseek-official",
+    themesDir,
+    theme,
+    tuiMode,
+    fullscreenExitOutput,
+    mermaidRenderingMode,
+    consoleBuffer,
+    resumeHint,
+    sessionsDir,
+    projcachePath,
+  } = options;
+  const resolvedDefaultModel = defaultModel ?? agent.session?.model ?? agent.options?.model ?? "unknown";
+  const available = availableModels.length > 0
+    ? availableModels.map((m) => (typeof m === "string" ? { id: m, provider, name: m } : m))
+    : [{ id: resolvedDefaultModel, provider, name: resolvedDefaultModel }];
   // Per-request model override for the dsh agent (mirrors @dsh-tui's
   // /model wiring): mutating target.current changes future steps only.
-  const target = { current: { provider: "deepseek-official", model: DEFAULT_MODEL } };
+  const target = { current: { provider, model: resolvedDefaultModel } };
   const disposeModelSelection = installModelSelection(agent.ctx, target);
   const cwd = dshSession?.header?.cwd ?? process.cwd();
   const listeners = new Set();
   const pendingPrompts = [];
   const toolCalls = new Map(); // callId -> { name, arguments }
-  let model = agent.session?.model ?? DEFAULT_MODEL;
+  let model = resolvedDefaultModel;
 
   // Bootstrap: inherit pi's AGENTS.md/CLAUDE.md (global + project) into the
   // dsh system prompt so the agent follows the same instructions as pi.
@@ -180,6 +293,14 @@ export function createPiSessionShim(ctx, agent, sessionId) {
     : () => {};
 
   let sessionName = "";
+  // Seed the /resume picker's session list from dsh's own storage (never
+  // pi's), including the current session so it can be resumed by id.
+  const bridgeDir = dshSessionsBridgeDir(sessionsDir);
+  writeSessionBridgeFiles(
+    bridgeDir,
+    loadDshSessions(dshProjcachePath(projcachePath)),
+    sessionId ? { id: sessionId, cwd, title: undefined } : undefined,
+  );
   let steeringMessages = []; // pending steers for the TUI's queue display
 
   // Session state pi reads (footer model/context); model updates with setModel.
@@ -187,7 +308,7 @@ export function createPiSessionShim(ctx, agent, sessionId) {
     messages: [],
     streaming: false,
     compacting: false,
-    model: { ...DEFAULT_MODEL_OBJECT },
+    model: { ...available[0] },
     thinkingLevel: "high",
   };
 
@@ -401,7 +522,15 @@ export function createPiSessionShim(ctx, agent, sessionId) {
             case "getCollapseChangelog":
               return true;
             case "getTheme":
-              return piSelectedTheme();
+              return piSelectedTheme(options?.theme);
+            case "getTuiMode":
+              return options?.tuiMode ?? piSettings().tuiMode ?? "regular";
+            case "getFullscreenExitOutput":
+              return options?.fullscreenExitOutput ?? piSettings().fullscreenExitOutput ?? "transcript";
+            case "getMermaidRenderingMode":
+              // pi renders mermaid live while streaming (default "streaming");
+              // returning undefined would show raw code until the message settles.
+              return options?.mermaidRenderingMode ?? piSettings().mermaidRenderingMode ?? "streaming";
             case "getImageWidthCells":
               return 40;
             case "getShowHardwareCursor":
@@ -432,7 +561,7 @@ export function createPiSessionShim(ctx, agent, sessionId) {
     sessionId,
     cwd,
     get model() {
-      return { id: model, provider: "deepseek", name: model };
+      return { id: model, provider, name: model };
     },
     set model(value) {
       if (typeof value === "string") model = value;
@@ -442,12 +571,13 @@ export function createPiSessionShim(ctx, agent, sessionId) {
     settingsManager: noopService,
     modelRuntime: {
       isUsingSubscription: () => false,
-      getAvailableSnapshot: () => [],
+      isUsingOAuth: () => false,
+      getAvailableSnapshot: () => [...available],
       getModel: () => undefined,
       getError: () => undefined,
       getAuth: () => undefined,
       checkAuth: () => undefined,
-      refresh: async () => undefined,
+      refresh: async (opts) => ({ aborted: opts?.signal?.aborted === true, errors: new Map() }),
       getModels: () => [],
     },
     sessionManager: new Proxy(
@@ -457,7 +587,7 @@ export function createPiSessionShim(ctx, agent, sessionId) {
         buildContextEntries: () => [],
         getTree: () => [],
         getLeafId: () => undefined,
-        getSessionDir: () => undefined,
+        getSessionDir: () => dshSessionsBridgeDir(sessionsDir),
         getSessionFile: () => undefined,
         getSessionId: () => sessionId,
         getSessionName: () => (sessionName || undefined),
@@ -475,7 +605,7 @@ export function createPiSessionShim(ctx, agent, sessionId) {
     ),
     scopedModels: [],
     modelRegistry: {
-      getAvailable: () => [...AVAILABLE_MODELS],
+      getAvailable: () => [...available],
       getAll: () => [],
       getApiKeyForProvider: () => undefined,
       getError: () => undefined,
@@ -487,10 +617,10 @@ export function createPiSessionShim(ctx, agent, sessionId) {
       authStorage: undefined,
     },
     resourceLoader: {
-      getThemes: () => ({ themes: loadPiThemes(), diagnostics: [], errors: [] }),
-      loadTheme: (name) => loadPiThemes().find((t) => t.name === name)?.sourcePath,
+      getThemes: () => ({ themes: loadPiThemes(options?.themesDir), diagnostics: [], errors: [] }),
+      loadTheme: (name) => loadPiThemes(options?.themesDir).find((t) => t.name === name)?.sourcePath,
       getSkills: () => ({ skills: [], diagnostics: [], errors: [] }),
-      getExtensions: () => ({ extensions: [], diagnostics: [], errors: [] }),
+      getExtensions: () => ({ extensions: options?.extensions ?? [], diagnostics: [], errors: [] }),
       getPrompts: () => ({ prompts: [], diagnostics: [], errors: [] }),
       getAgentsFiles: () => ({ agentsFiles: [], diagnostics: [], errors: [] }),
       getSystemPromptSource: () => undefined,
@@ -576,16 +706,15 @@ export function createPiSessionShim(ctx, agent, sessionId) {
       }
     },
     setModel(nextModel) {
-      const provider = "deepseek-official";
-      const id = typeof nextModel?.id === "string" ? nextModel.id : nextModel?.model ?? DEFAULT_MODEL;
+      const id = typeof nextModel?.id === "string" ? nextModel.id : nextModel?.model ?? resolvedDefaultModel;
       target.current = { provider, model: id };
       model = id;
       stateRef.model = { id, provider, name: id };
       return Promise.resolve();
     },
     cycleModel() {
-      const next = AVAILABLE_MODELS[(AVAILABLE_MODELS.findIndex((m) => m.id === model) + 1) % AVAILABLE_MODELS.length];
-      target.current = { provider: "deepseek-official", model: next.id };
+      const next = available[(available.findIndex((m) => m.id === model) + 1) % available.length];
+      target.current = { provider, model: next.id };
       model = next.id;
       stateRef.model = { id: next.id, provider: next.provider, name: next.name };
       return Promise.resolve();
@@ -599,6 +728,8 @@ export function createPiSessionShim(ctx, agent, sessionId) {
         } catch (err) {
           process.stderr.write(`[dsh-pi] setSessionName failed: ${err?.message ?? err}\n`);
         }
+        // Keep the /resume picker's entry for the current session fresh.
+        writeSessionBridgeFiles(bridgeDir, loadDshSessions(dshProjcachePath(projcachePath)), { id: sessionId, cwd, title: sessionName });
       }
     },
     setAutoCompactionEnabled() {},
@@ -642,7 +773,7 @@ export function createPiSessionShim(ctx, agent, sessionId) {
       return [];
     },
     agent: {
-      model: DEFAULT_MODEL,
+      model: resolvedDefaultModel,
       reasoningEffort: "high",
       // Escape-interrupt calls session.agent.abort(); route it to the dsh
       // agent's cancel (clears the inbox and aborts the running phase).
@@ -666,7 +797,23 @@ export function createPiSessionShim(ctx, agent, sessionId) {
       getMarkdownTransformers: () => [],
     },
 
+    replayHistory() {
+      // A resumed dsh session loads its event log but does not re-emit it;
+      // replay it through the same translation so the TUI shows the prior
+      // conversation (called by the front door after the TUI is up).
+      for (const event of dshSession?.events ?? []) {
+        try {
+          onSessionEvent(dshSession, event);
+        } catch (err) {
+          process.stderr.write(`[dsh-pi] replayHistory event ${event.type} failed: ${err?.message ?? err}\n`);
+        }
+      }
+    },
     dispose() {
+      // Teardown of THIS session's subscriptions. The console-buffer flush and
+      // the resume hint belong to the runtime's FINAL dispose (the quit path),
+      // NOT here: a session switch calls this mid-TUI and must not flush
+      // buffered reports into the terminal or print a stale resume hint.
       disposeEvents();
       disposeModelSelection();
       disposeAgentsMd();
@@ -683,10 +830,19 @@ export function createPiSessionShim(ctx, agent, sessionId) {
  * resolve to safe no-op defaults so pi UI features we do not bridge yet do not
  * crash the boot.
  */
-export function createRuntimeHost(ctx, agent, sessionId) {
-  const session = createPiSessionShim(ctx, agent, sessionId);
+export function createRuntimeHost(ctx, agent, sessionId, modelOptions = {}) {
+  // The runtime's session can be REPLACED in-process (pi's switchSession
+  // contract): /resume creates a new dsh agent on the resumed session id via
+  // ctx.agents.resume and rebinds this runtime to it — no process spawn, no
+  // terminal handoff, so the terminal's foreground group and the frontend's
+  // state never change.
+  let currentAgent = agent;
+  let currentId = sessionId;
+  const makeSession = () => createPiSessionShim(ctx, currentAgent, currentId, modelOptions);
+  let session = makeSession();
   const cwd = session.cwd;
-
+  const { consoleBuffer, resumeHint } = modelOptions;
+  let rebindSession = null;
   const noopService = new Proxy(
     {},
     {
@@ -708,23 +864,55 @@ export function createRuntimeHost(ctx, agent, sessionId) {
     },
   );
 
-  const services = {
+  const rebuildServices = () => ({
     settingsManager: noopService,
     sessionManager: {
-      getCwd: () => cwd,
+      getCwd: () => session.cwd,
     },
     modelRegistry: noopService,
     authStorage: noopService,
     resourceLoader: noopService,
-  };
+  });
+  let services = rebuildServices();
 
   return {
-    session,
-    services,
-    setRebindSession() {},
+    get session() {
+      return session;
+    },
+    get services() {
+      return services;
+    },
+    setRebindSession(cb) {
+      rebindSession = cb;
+    },
     setBeforeSessionInvalidate() {},
-    switchSession() {
-      return Promise.reject(new Error("Session switching is not supported in dsh-pi. Start dsh with --resume <session-id> to resume a persisted session."));
+    async switchSession(sessionPath) {
+      // The picker lists DSH sessions (bridge files generated from dsh's own
+      // storage). Resume IN PROCESS — the pi-tui way: create a new dsh agent
+      // on the resumed session id (ctx.agents.resume loads its persisted
+      // events), swap this runtime's session, and let pi-tui rebind the UI.
+      // No process spawn, so the terminal's foreground group and the
+      // frontend's emulator state are untouched.
+      const id = typeof sessionPath === "string" ? sessionIdFromBridgeFile(sessionPath) : undefined;
+      if (!id) {
+        return { cancelled: true };
+      }
+      session.dispose(); // teardown the current session's subscriptions
+      const published = await ctx.agents.resume({
+        resumeSessionId: id,
+        agentOptions: currentAgent.options ?? {},
+      });
+      currentAgent = published?.agent ?? published;
+      currentId = id;
+      session = makeSession();
+      services = rebuildServices();
+      // pi-tui's finishSessionReplacement rebinds the UI to the new session
+      // (attaching its event listeners); ONLY THEN replay the history, or the
+      // prior-conversation events fire into the old session's listeners and
+      // are dropped.
+      if (typeof rebindSession === "function") await rebindSession(session);
+      session.replayHistory();
+      return { cancelled: false };
     },
     newSession() {
       return Promise.reject(new Error("Creating a new session is not supported in dsh-pi. Use /model to switch models in the current session, or restart dsh for a fresh one."));
@@ -736,7 +924,15 @@ export function createRuntimeHost(ctx, agent, sessionId) {
       return Promise.reject(new Error("Session import is not supported in dsh-pi (it is a dsh-powered front door)."));
     },
     dispose() {
+      // Final teardown (pi's quit path calls runtimeHost.dispose() BEFORE
+      // process.exit, so this is the reliable point): flush buffered plugin
+      // reports (never the terminal mid-TUI) and print the dsh resume hint.
       session.dispose();
+      if (consoleBuffer) {
+        consoleBuffer.restore();
+        consoleBuffer.flush();
+      }
+      writeSync(1, `${resumeHint ?? formatResumeHint(sessionId)}\n`);
     },
   };
 }

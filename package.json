@@ -1,31 +1,14 @@
 {
-  "name": "dsh-pi-tui-shim",
+  "name": "dsh-pi-tui-mono",
   "version": "0.1.0",
-  "description": "pi-TUI front door for DeepSeek Harness \u2014 dsh agent runtime rendered by pi's actual InteractiveMode (update-proof: the look ships with pi).",
+  "private": true,
+  "description": "Monorepo: run the pi coding agent's terminal experience inside DeepSeek Harness — the real InteractiveMode as the front door, pi extensions as dsh plugins, and a migration kit for existing pi installations.",
   "license": "MIT",
-  "type": "module",
-  "main": "lib/index.js",
-  "exports": {
-    ".": {
-      "default": "./lib/index.js"
-    },
-    "./startup": {
-      "default": "./lib/startup.js"
-    },
-    "./cordis.patch.yml": "./cordis.patch.yml",
-    "./package.json": "./package.json"
-  },
-  "dependencies": {
-    "@deepseek-ai/cordis": "latest",
-    "@deepseek-ai/schemastery": "latest",
-    "@earendil-works/pi-coding-agent": "^0.80.3"
-  },
-  "dsh": {
-    "bundle": {
-      "patch": "./cordis.patch.yml"
-    }
-  },
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
-    "test": "node --test test/"
-  }
+    "test": "pnpm -r test"
+  },
+  "packageManager": "pnpm@10.4.1"
 }

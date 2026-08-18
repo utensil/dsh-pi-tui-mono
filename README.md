@@ -1,90 +1,78 @@
-# dsh-pi-tui-shim
+# dsh-pi-tui-mono
 
-pi's real terminal UI as the front door for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`).
+**Use pi's terminal experience inside DeepSeek Harness — the same look, the same
+extensions, migrated from your existing pi installation.**
 
-`dsh-pi-tui-shim` is a dsh profile bundle that mounts
-[`@earendil-works/pi-coding-agent`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)'s
-`InteractiveMode` — the exact TUI pi uses — and bridges it to the dsh agent
-runtime. The agent, tools, sessions, and credentials stay DeepSeek Harness;
-the look is pi's, and it updates automatically whenever pi updates its TUI.
+If you use [pi](https://pi.dev/)'s terminal UI and want that exact experience
+while running [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)
+(`dsh`) underneath, this monorepo is for you. It is a drop-in: the front door
+is pi's **real** `InteractiveMode` (not a reimplementation — the look ships
+with pi and updates with it), the agent underneath is dsh, and pi's extensions
+run as dsh plugins. A migration kit moves your installed pi settings, themes,
+and extensions over.
 
-## Status
+> **Focus: TUI.** The terminal is where this project lives. The TUI comes from
+> pi; the agent, tools, sessions, and credentials are dsh; pi extensions are
+> bridged in as dsh plugins. Nothing here replaces dsh's headless or web
+> surfaces.
 
-✅ **Working.** The bundle mounts pi's real `InteractiveMode` over the dsh
-agent-loop and renders live turns end-to-end: user input, assistant streaming,
-tool calls with result cards, multi-turn context, and persisted-session resume
-(`--resume <session-id>`). Verified interactively in a real terminal.
+## The drop-in experience
 
-## Why not just use `@dsh-tui/dsh-tui`?
+| | pi | this project (dsh + `tui-pi` profile) |
+|---|---|---|
+| Terminal UI | pi's `InteractiveMode` | pi's `InteractiveMode` (same code) |
+| Themes | `~/.pi/agent/themes` + built-ins | inherited, or migrated into the profile |
+| Agent | pi | dsh (`agent-loop`, tools, sessions, credentials) |
+| Instructions | pi's AGENTS.md | the same AGENTS.md, bootstrapped into the dsh agent |
+| Extensions | pi extension packages | the same packages, mounted as dsh plugins via [pi2dsh](https://github.com/weijiafu14/pi2dsh) |
+| Slash commands | `/model`, `/export`, `/quit`, … | the same pi surfaces, backed by dsh |
 
-Other dsh TUIs are *reimplementations* of a terminal UI — same library family
-(`@earendil-works/pi-tui`), different components, different palette, different
-rendering. This project instead reuses pi's actual `InteractiveMode` and theme
-as a dependency, so the visual identity is pi's by construction and follows pi
-releases without edits here.
+## Packages
 
-## Requirements
+This is a pnpm workspace. The three packages are neutral — they never hardcode
+a model, a provider, a theme, or an extension list; everything comes from
+configuration, with `@dsh-pi/migrate` writing that configuration from your pi
+installation.
 
-- `dsh` CLI ([DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness))
-- Node.js `^22.19 || >=24`
-- pnpm (for profile plugin management)
+| Package | What it does |
+|---|---|
+| [`@dsh-pi/tui`](packages/tui) | The pi-TUI front door: mounts pi's `InteractiveMode` over the dsh agent and translates dsh events to pi session events 1:1. |
+| [`@dsh-pi/extensions`](packages/extensions) | Pi extensions as dsh plugins: a thin layer over [pi2dsh](https://github.com/weijiafu14/pi2dsh) that mounts local extension packages, exposes a mount registry, and emits TUI-bound extension events. |
+| [`@dsh-pi/migrate`](packages/migrate) | The migration kit: reads an existing pi installation's settings, themes, and extensions, and writes them into a dsh profile as neutral configuration. |
 
 ## Install
 
-Install from GitHub (not yet published to npm):
+You can point your agent at this repo to install, set up, and migrate
+everything. The agent-facing instructions live in
+[`AGENTS.md`](AGENTS.md); the short version:
 
 ```sh
-dsh plugin --profile tui-pi add github:utensil/dsh-pi-tui-shim
+# 1. Install the bundle into a profile (the `tui-pi` name is a convention).
+dsh plugin --profile tui-pi add github:utensil/dsh-pi-tui-mono
+dsh plugin --profile tui-pi add @dsh-pi/tui
+dsh plugin --profile tui-pi add @dsh-pi/extensions
+
+# 2. Migrate your existing pi installation (settings, theme, extensions).
+npx @dsh-pi/migrate                       # dry run
+npx @dsh-pi/migrate --apply               # write the profile configuration
+#    then install the printed `dsh plugin add <pi-package>` commands.
+
+# 3. Go.
 dsh --profile tui-pi
-```
-
-Resume a persisted session:
-
-```sh
 dsh --profile tui-pi --resume <session-id>
 ```
 
-### Credentials
-
-The profile reads `DEEPSEEK_API_KEY` through the dsh credentials service,
-exactly like the shipped `headless`/`web` profiles — store it once via the
-credentials store or environment:
-
-```sh
-# managed store (~/.dsh/.credentials.yaml, mode 0600)
-# or the launching environment:
-export DEEPSEEK_API_KEY=sk-...
-```
-
-## How it works
-
-```
-dsh (cordis runtime)
-  ├── dsh-base            agent-loop · sessions · tools · credentials · models
-  └── dsh-pi-tui-shim
-        ├── tui-startup   parses --resume, provides the session identity
-        └── tui           mounts pi's InteractiveMode (imported), bridged to
-                          the dsh agent via an AgentSessionRuntime-shaped shim
-```
-
-- The **TUI shell, theme, and rendering** are pi's `InteractiveMode` — imported,
-  never reimplemented.
-- The **bridge** translates user input → dsh turns and dsh agent events → pi
-  session events (assistant messages, tool calls, reasoning).
-- Everything else (tools, sessions, permissions, credentials) is unmodified
-  `dsh-base`.
+Requirements: `dsh` CLI, Node.js `^22.19 || >=24`, pnpm.
 
 ## Development
 
 ```sh
-git clone git@github.com:utensil/dsh-pi-tui-shim.git
-cd dsh-pi-tui-shim
-dsh plugin --profile tui-pi add file:.
-dsh --profile tui-pi            # or --dump-config to inspect composition
+pnpm install
+pnpm test                 # runs every package's test suite
+bash scripts/dev-link.sh  # link the workspace into the ~/.dsh/profiles/tui-pi profile
 ```
 
-TUI changes are verified in a real terminal (tmux + `capture-pane`), mirroring
-the interaction tests in the dsh ecosystem.
+See `docs/parity.md` for the verified feature matrix.
 
 ## License
 

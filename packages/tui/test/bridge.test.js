@@ -10,7 +10,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
-import { createPiSessionShim } from "../lib/session-shim.js";
+import { createPiSessionShim } from "../lib/bridge.js";
 
 /** Build a fake environment that captures emitted pi events + agent calls. */
 function harness() {
@@ -288,7 +288,7 @@ test("setSessionName appends a session/title event and getSessionName returns it
 });
 
 test("unsupported session operations reject with descriptive messages", async () => {
-  const { createRuntimeHost } = await import("../lib/session-shim.js");
+  const { createRuntimeHost } = await import("../lib/bridge.js");
   const h = harness();
   const host = createRuntimeHost(h.ctx, h.agent, "main-session-test");
   await assert.rejects(host.newSession(), /not supported in dsh-pi/);
@@ -348,6 +348,19 @@ test("inherits pi themes (custom + built-in) and the selected theme", () => {
   assert.ok(sel === undefined || typeof sel === "string");
 });
 
+test("migrated themesDir + bundle theme override the live pi home (neutral config)", async () => {
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(join(tmpdir(), "dsh-pi-themes-"));
+  writeFileSync(join(dir, "migrated.json"), JSON.stringify({ name: "migrated", fg: "#abc" }));
+  const h = harness();
+  const shim = createPiSessionShim(h.ctx, h.agent, "s", { themesDir: dir, theme: "migrated" });
+  const themes = shim.resourceLoader.getThemes().themes;
+  assert.ok(themes.some((t) => t.name === "migrated"), "migrated theme present");
+  assert.equal(shim.settingsManager.getTheme(), "migrated", "bundle theme wins");
+});
+
 test("bootstraps pi AGENTS.md into the dsh system prompt", async () => {
   const h = harness();
   // the fake agent.ctx captures system-prompt/assemble hooks
@@ -394,4 +407,240 @@ test("AGENTS.md bootstrap escapes template braces (no interpolate throw)", async
   assert.ok(bootstrap, "bootstrap section appended");
   assert.ok(!bootstrap.text.includes("{{"), "raw {{ escaped");
   assert.ok(bootstrap.text.includes("{ {CONF}"), "escaped braces present");
+});
+
+test("fullscreen TUI settings flow from config (neutral, migratable)", () => {
+  const h = harness();
+  const shim = createPiSessionShim(h.ctx, h.agent, "s", {
+    tuiMode: "fullscreen",
+    fullscreenExitOutput: "resume-hint",
+  });
+  assert.equal(shim.settingsManager.getTuiMode(), "fullscreen");
+  assert.equal(shim.settingsManager.getFullscreenExitOutput(), "resume-hint");
+  // defaults when neither config nor pi settings provide values
+  const plain = createPiSessionShim(h.ctx, h.agent, "s");
+  const mode = plain.settingsManager.getTuiMode();
+  assert.ok(mode === "regular" || mode === "fullscreen", "falls back to pi settings or regular");
+});
+
+test("loadNodePreloads honors --require preloads from NODE_OPTIONS (idempotent, fail-safe)", async () => {
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(join(tmpdir(), "dsh-pi-preload-"));
+  const good = join(dir, "good-preload.cjs");
+  writeFileSync(good, "globalThis.__dshPiPreloadCount = (globalThis.__dshPiPreloadCount ?? 0) + 1;");
+  const bad = join(dir, "bad-preload.cjs");
+  writeFileSync(bad, "throw new Error('boom');");
+  const prev = process.env.NODE_OPTIONS;
+  process.env.NODE_OPTIONS = `--require=${good} --require=${bad}`;
+  try {
+    const { loadNodePreloads } = await import("../lib/index.js");
+    // load twice: node's module cache makes the body run exactly once
+    assert.equal(loadNodePreloads(), 1, "one preload loaded, one failed");
+    loadNodePreloads();
+    assert.equal(globalThis.__dshPiPreloadCount, 1, "preload body ran once (module cache)");
+  } finally {
+    process.env.NODE_OPTIONS = prev;
+  }
+});
+
+test("console buffering keeps plugin reports off the terminal while the TUI is up", async () => {
+  const { installConsoleBuffer } = await import("../lib/index.js");
+  const flushed = [];
+  const handle = installConsoleBuffer({ sink: (line) => flushed.push(line) });
+  try {
+    console.log("mount report", 42);
+    console.warn("warning line");
+    assert.equal(handle.lines.length, 2, "both lines buffered");
+    assert.ok(handle.lines[0].includes("[console.log] mount report 42"));
+    assert.ok(handle.lines[1].includes("[console.warn] warning line"));
+    assert.equal(flushed.length, 0, "nothing flushed while active");
+  } finally {
+    handle.restore();
+  }
+  console.log("after restore, console works normally");
+  handle.flush();
+  assert.equal(flushed.length, 2, "flush emits the captured lines");
+});
+
+test("mermaid rendering mode resolves config -> pi settings -> streaming default", () => {
+  const h = harness();
+  const shim = createPiSessionShim(h.ctx, h.agent, "s", { mermaidRenderingMode: "final" });
+  assert.equal(shim.settingsManager.getMermaidRenderingMode(), "final", "config wins");
+  const plain = createPiSessionShim(h.ctx, h.agent, "s");
+  const mode = plain.settingsManager.getMermaidRenderingMode();
+  assert.ok(mode === "streaming" || mode === "off" || mode === "final", "falls back to pi settings or streaming");
+});
+
+test("modelRuntime surfaces feed the /model picker and refresh cleanly", async () => {
+  const h = harness();
+  const shim = createPiSessionShim(h.ctx, h.agent, "s", {
+    availableModels: [{ id: "model-a", provider: "deepseek-official", name: "Model A" }],
+    defaultModel: "model-a",
+  });
+  // getAvailableSnapshot feeds pi's /model dialog
+  const snapshot = shim.modelRuntime.getAvailableSnapshot();
+  assert.equal(snapshot.length, 1);
+  assert.equal(snapshot[0].id, "model-a");
+  assert.equal(snapshot[0].provider, "deepseek-official");
+  // refresh returns the pi-shaped result (regression: undefined crashed the picker)
+  const result = await shim.modelRuntime.refresh({ signal: { aborted: false } });
+  assert.equal(result.aborted, false);
+  assert.ok(result.errors instanceof Map);
+  const aborted = await shim.modelRuntime.refresh({ signal: { aborted: true } });
+  assert.equal(aborted.aborted, true);
+  // OAuth/subscription stubs answer pi's footer and /login
+  assert.equal(shim.modelRuntime.isUsingOAuth("deepseek"), false);
+  assert.equal(shim.modelRuntime.isUsingSubscription(), false);
+  assert.equal(shim.modelRegistry.getAvailable()[0].id, "model-a");
+});
+
+test("getExtensions surfaces mounted extension packages to pi's extension list", () => {
+  const h = harness();
+  const shim = createPiSessionShim(h.ctx, h.agent, "s", {
+    extensions: [{ name: "pi-test-ext", source: "dsh-pi-extensions", version: "0.0.1", path: "pi-test-ext" }],
+  });
+  const exts = shim.resourceLoader.getExtensions().extensions;
+  assert.equal(exts.length, 1);
+  assert.equal(exts[0].name, "pi-test-ext");
+  assert.equal(exts[0].source, "dsh-pi-extensions");
+});
+
+test("mermaid markdown transformer renders box-drawing diagrams with the shim's mode (integration)", async () => {
+  const { fileURLToPath } = await import("node:url");
+  const entry = fileURLToPath(await import.meta.resolve("@earendil-works/pi-coding-agent"));
+  const base = entry.replace("/dist/index.js", "");
+  const { createMermaidMarkdownTransformer } = await import(`${base}/dist/modes/interactive/components/mermaid.js`);
+  const h = harness();
+  // The shim's settingsManager is what InteractiveMode wires as getMode.
+  const shim = createPiSessionShim(h.ctx, h.agent, "s", { mermaidRenderingMode: "streaming" });
+  const tx = createMermaidMarkdownTransformer({ getMode: () => shim.settingsManager.getMermaidRenderingMode() });
+  const fence = "```mermaid\ngraph LR\n  A --> B\n  B --> C\n```";
+  const rendered = tx(fence, { messageType: "assistant", isStreaming: true, availableWidth: 80 });
+  assert.ok(rendered.includes("┌") || rendered.includes("─"), "box-drawing rendered while streaming");
+  // mode "off" passes the fence through unchanged (no diagram, no loss)
+  const offShim = createPiSessionShim(h.ctx, h.agent, "s", { mermaidRenderingMode: "off" });
+  const offTx = createMermaidMarkdownTransformer({ getMode: () => offShim.settingsManager.getMermaidRenderingMode() });
+  assert.ok(offTx(fence, { messageType: "assistant", isStreaming: true, availableWidth: 80 }).includes("mermaid"));
+});
+
+test("session.dispose flushes buffered reports and writes the dsh resume hint", async () => {
+  const { installConsoleBuffer, formatResumeHint } = await import("../lib/index.js");
+  const flushed = [];
+  const buffer = installConsoleBuffer({ sink: (line) => flushed.push(line) });
+  console.log("mount report during TUI");
+  const h = harness();
+  const shim = createPiSessionShim(h.ctx, h.agent, "s", { consoleBuffer: buffer });
+  assert.equal(flushed.length, 0, "nothing flushed while the TUI is up");
+  // A session SWITCH (mid-TUI) must NOT flush buffered reports into the
+  // terminal; only the runtime's FINAL dispose (the quit path) does.
+  shim.dispose();
+  assert.equal(flushed.length, 0, "switch teardown does not flush (no mid-TUI console output)");
+  const { createRuntimeHost } = await import("../lib/bridge.js");
+  const rt = createRuntimeHost(h.ctx, h.agent, "s", { consoleBuffer: buffer });
+  rt.dispose();
+  assert.equal(flushed.length, 1, "final dispose flushes (regression: it was lost at quit)");
+  assert.ok(flushed[0].includes("mount report during TUI"));
+  assert.match(formatResumeHint("main-session-abc"), /^To resume this session: dsh --profile tui-pi --resume main-session-abc$/);
+});
+
+test("session bridge: /resume lists dsh sessions (never pi's) and switchSession maps back to --resume", async () => {
+  const { mkdtempSync, writeFileSync, readFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(join(tmpdir(), "dsh-pi-bridge-"));
+  const sessionsDir = join(dir, "sessions");
+  const projcache = join(dir, "projcache.json");
+  const cachedId = "main-session-123e4567-e89b-12d3-a456-426614174000";
+  writeFileSync(projcache, JSON.stringify({
+    tables: { sessions: {
+      [cachedId]: { identity: { cwd: "/work" }, rows: { title: { val: "Cached session" } } },
+    } },
+  }));
+
+  const exits = [];
+  const h = harness();
+  const shim = createPiSessionShim(h.ctx, h.agent, "s", {
+    sessionsDir, projcachePath: projcache, onExit: () => exits.push("exit"),
+  });
+  // getSessionDir points at the bridge dir (NOT pi's default ~/.pi/agent/sessions)
+  assert.equal(shim.sessionManager.getSessionDir(), sessionsDir);
+  // the bridge file exists with the dsh session id + title
+  const file = join(sessionsDir, `${cachedId}.jsonl`);
+  const content = readFileSync(file, "utf8");
+  assert.ok(content.includes(`"id":"${cachedId}"`), "dsh session id in the header");
+  assert.ok(content.includes("Cached session"), "title in session_info");
+
+  // switchSession resumes IN PROCESS (pi-tui's contract): the runtime swaps
+  // to a new session built on the resumed dsh agent.
+  const { createRuntimeHost, formatResumeHint, sessionIdFromBridgeFile } = await import("../lib/bridge.js");
+  assert.equal(sessionIdFromBridgeFile(file), cachedId);
+  const resumedAgent = {
+    session: { header: { cwd: "/work" }, events: [], model: "deepseek-v4-flash", append() {} },
+    followup() {}, steer() {}, cancel() {},
+    ctx: { on: () => () => {} },
+    options: {},
+  };
+  const resumed = [];
+  // the resumed dsh session carries its persisted event log
+  resumedAgent.session.events.push(
+    { type: "turn/start", data: {}, seq: 1 },
+    { type: "user/message", data: { content: [{ type: "text", text: "hi" }], source: { kind: "user" } }, seq: 2 },
+    { type: "assistant/message", data: { message: { content: [{ type: "text", text: "Welcome back" }] } }, seq: 3 },
+    { type: "turn/end", data: {}, seq: 4 },
+  );
+  h.ctx.agents = { resume: async () => resumedAgent };
+  const rt = createRuntimeHost(h.ctx, h.agent, "s", { sessionsDir, projcachePath: projcache });
+  let rebound = null;
+  const rebindEvents = [];
+  rt.setRebindSession((s) => {
+    rebound = s;
+    // pi-tui's finishSessionReplacement attaches the NEW session's listeners
+    // here; events replayed BEFORE this are dropped (the regression).
+    s.subscribe((ev) => rebindEvents.push(ev));
+  });
+  const result = await rt.switchSession(file);
+  assert.equal(result.cancelled, false, "switchSession resolves without cancelling");
+  assert.ok(rebound, "rebind callback invoked with the new session (pi-tui finishSessionReplacement)");
+  assert.equal(rebound.sessionId, cachedId, "runtime rebound to the resumed session id");
+  assert.ok(
+    rebindEvents.some((e) => e.type === "message_end" && e.message?.content?.[0]?.text === "Welcome back"),
+    "resumed history replayed AFTER the rebind reached the new session's listeners (regression: replay-before-rebind dropped it)",
+  );
+  // a non-bridge path cancels cleanly (no crash, no process exit)
+  const cancelled = await rt.switchSession("/tmp/not-a-bridge-file.jsonl");
+  assert.equal(cancelled.cancelled, true, "non-bridge path cancels");
+});
+
+test("ensureEscapeTimeout sets a saner pi-tui escape window but honors an operator value", async () => {
+  const prev = process.env.PI_TUI_ESC_TIMEOUT;
+  try {
+    delete process.env.PI_TUI_ESC_TIMEOUT;
+    const { ensureEscapeTimeout } = await import("../lib/index.js");
+    assert.equal(ensureEscapeTimeout(), "150", "default applied when unset");
+    assert.equal(ensureEscapeTimeout(), "150", "idempotent");
+    process.env.PI_TUI_ESC_TIMEOUT = "42";
+    assert.equal(ensureEscapeTimeout(), "42", "operator value wins");
+  } finally {
+    if (prev === undefined) delete process.env.PI_TUI_ESC_TIMEOUT;
+    else process.env.PI_TUI_ESC_TIMEOUT = prev;
+  }
+});
+
+test("replayHistory renders a resumed session's prior conversation through the bridge", () => {
+  const h = harness();
+  // seed the fake session log with prior events (like a resumed dsh session)
+  h.agent.session.events.push(
+    { type: "turn/start", data: {}, seq: 1 },
+    { type: "user/message", data: { content: [{ type: "text", text: "hi" }], source: { kind: "user" } }, seq: 2 },
+    { type: "assistant/message", data: { message: { content: [{ type: "text", text: "Hi there!" }] } }, seq: 3 },
+    { type: "turn/end", data: {}, seq: 4 },
+  );
+  h.shim.replayHistory();
+  const userMsg = h.emitted.find((e) => e.type === "message_start" && e.message?.role === "user");
+  assert.ok(userMsg, "prior user message rendered");
+  assert.equal(userMsg.message.content[0].text, "hi");
+  const reply = h.emitted.find((e) => e.type === "message_end" && e.message?.content?.[0]?.text === "Hi there!");
+  assert.ok(reply, "prior assistant reply rendered");
 });

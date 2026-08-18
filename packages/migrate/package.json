@@ -1,0 +1,20 @@
+{
+  "name": "@dsh-pi/migrate",
+  "version": "0.1.0",
+  "description": "Neutral migration kit: move an existing pi installation's settings, theme, and extensions into a dsh profile powered by @dsh-pi/tui + @dsh-pi/extensions.",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "dsh-pi-migrate": "lib/cli.js"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}
