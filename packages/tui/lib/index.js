@@ -105,7 +105,9 @@ export function installConsoleBuffer({ sink = (line) => writeSync(2, `${line}\n`
       for (const [level, original] of originals) console[level] = original;
     },
     flush: () => {
-      for (const line of lines) sink(line);
+      // One-shot: a session switch (dispose) must not re-emit the same
+      // reports at a later quit.
+      for (const line of lines.splice(0)) sink(line);
     },
   };
 }
@@ -171,34 +173,8 @@ export const apply = async (ctx, config) => {
     consoleBuffer,
     resumeHint: `To resume this session: dsh --profile tui-pi --resume ${sessionId}`,
     sessionsDir: config?.sessionsDir,
-    // /resume of a dsh session: stop the TUI cleanly (leaves the alt screen),
-    // then re-launch dsh against that session in the SAME terminal so the
-    // switch happens in place (the new process replays the conversation).
-    onExit: (sessionId) => {
-      // Stop the TUI cleanly (leaves the alt screen + restores the terminal),
-      // then re-launch dsh against that session in the SAME terminal so the
-      // switch happens in place. detached + unref keep the child alive when
-      // this parent exits (without them it dies with the parent's process
-      // group); the 500ms delay lets the child grab the terminal first.
-      if (running) mode.stop();
-      if (config?.resumeStrategy === "command") {
-        writeSync(1, `${formatResumeHint(sessionId)}\n`);
-        process.exit(0);
-        return;
-      }
-      writeSync(2, `[@dsh-pi/tui] resuming ${sessionId}...\n`);
-      const child = spawn("dsh", ["--profile", "tui-pi", "--resume", sessionId], {
-        stdio: "inherit",
-        env: process.env,
-        detached: true,
-      });
-      child.on("error", (err) => {
-        writeSync(2, `[@dsh-pi/tui] resume spawn failed: ${err?.message ?? err}\n`);
-      });
-      child.unref();
-      setTimeout(() => process.exit(0), 500);
-    },
   });
+
   const mode = new InteractiveMode(runtimeHost, {});
   await mode.init();
   // A resumed session's prior conversation renders through the same bridge

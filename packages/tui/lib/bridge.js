@@ -837,9 +837,17 @@ export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
  * crash the boot.
  */
 export function createRuntimeHost(ctx, agent, sessionId, modelOptions = {}) {
-  const session = createPiSessionShim(ctx, agent, sessionId, modelOptions);
-  const { onExit } = modelOptions;
+  // The runtime's session can be REPLACED in-process (pi's switchSession
+  // contract): /resume creates a new dsh agent on the resumed session id via
+  // ctx.agents.resume and rebinds this runtime to it — no process spawn, no
+  // terminal handoff, so the terminal's foreground group and the frontend's
+  // state never change.
+  let currentAgent = agent;
+  let currentId = sessionId;
+  const makeSession = () => createPiSessionShim(ctx, currentAgent, currentId, modelOptions);
+  let session = makeSession();
   const cwd = session.cwd;
+  let rebindSession = null;
   const noopService = new Proxy(
     {},
     {
@@ -861,32 +869,51 @@ export function createRuntimeHost(ctx, agent, sessionId, modelOptions = {}) {
     },
   );
 
-  const services = {
+  const rebuildServices = () => ({
     settingsManager: noopService,
     sessionManager: {
-      getCwd: () => cwd,
+      getCwd: () => session.cwd,
     },
     modelRegistry: noopService,
     authStorage: noopService,
     resourceLoader: noopService,
-  };
+  });
+  let services = rebuildServices();
 
   return {
-    session,
-    services,
-    setRebindSession() {},
+    get session() {
+      return session;
+    },
+    get services() {
+      return services;
+    },
+    setRebindSession(cb) {
+      rebindSession = cb;
+    },
     setBeforeSessionInvalidate() {},
-    switchSession(sessionPath) {
+    async switchSession(sessionPath) {
       // The picker lists DSH sessions (bridge files generated from dsh's own
-      // storage); resuming means relaunching dsh against that session id.
+      // storage). Resume IN PROCESS — the pi-tui way: create a new dsh agent
+      // on the resumed session id (ctx.agents.resume loads its persisted
+      // events), swap this runtime's session, and let pi-tui rebind the UI.
+      // No process spawn, so the terminal's foreground group and the
+      // frontend's emulator state are untouched.
       const id = typeof sessionPath === "string" ? sessionIdFromBridgeFile(sessionPath) : undefined;
-      if (id && typeof onExit === "function") {
-        // Stop the TUI (leaving the alt screen) BEFORE the command is printed,
-        // otherwise the write lands inside the alt screen and is lost.
-        onExit(id);
-        return Promise.resolve();
+      if (!id) {
+        return { cancelled: true };
       }
-      return Promise.reject(new Error("Session switching is not supported in dsh-pi. Start dsh with --resume <session-id> to resume a persisted session."));
+      session.dispose(); // teardown the current session's subscriptions
+      const published = await ctx.agents.resume({
+        resumeSessionId: id,
+        agentOptions: currentAgent.options ?? {},
+      });
+      currentAgent = published?.agent ?? published;
+      currentId = id;
+      session = makeSession();
+      services = rebuildServices();
+      session.replayHistory();
+      if (typeof rebindSession === "function") await rebindSession(session);
+      return { cancelled: false };
     },
     newSession() {
       return Promise.reject(new Error("Creating a new session is not supported in dsh-pi. Use /model to switch models in the current session, or restart dsh for a fresh one."));

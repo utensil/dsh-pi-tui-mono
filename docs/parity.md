@@ -69,13 +69,16 @@ exactly pi's style), one block per step (no cross-step flooding).
   cache: id + title + cwd), pruned as sessions leave the cache — so the picker
   lists real DSH sessions (verified live: 64 infra-land sessions with titles)
   and NEVER pi's sessions (`~/.pi/agent/sessions/` is untouched).
-- Selecting a session resumes IN PLACE: the TUI stops cleanly and the front
-  door re-launches `dsh --profile tui-pi --resume <id>` in the same terminal
-  (`detached` + `unref` so the child survives the parent's exit; verified live:
-  the picked session's conversation replayed and the TUI stayed interactive).
-  The handoff is TUI stop -> shell -> child TUI (~15s boot); if the terminal
-  frontend mishandles that transition, set `resumeStrategy: "command"` on the
-  tui row to print the resume command and exit cleanly instead of spawning.
+- Selecting a session resumes **in process** — the pi-tui way:
+  `runtimeHost.switchSession` creates a new dsh agent on the resumed session id
+  via `ctx.agents.resume` (dsh's own in-process resume API, which loads the
+  persisted events), swaps the runtime's session, and lets pi-tui rebind the UI
+  (`finishSessionReplacement`) + replay the history. No process spawn, so the
+  terminal's foreground group never changes — verified live in herdr: the
+  foreground group stays the dsh process before AND after the resume (an
+  earlier spawn-based handoff changed it to the shell, which made herdr's
+  frontend treat the pane as shell-owned and echo mouse sequences + typed
+  input as text).
   The current session is not listed until it has persisted storage (dsh's
   agent-loop refuses storage-less resume ids). Regression-tested:
   `switchSession` parses the bridge file id and invokes `onExit`;

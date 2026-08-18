@@ -568,19 +568,28 @@ test("session bridge: /resume lists dsh sessions (never pi's) and switchSession 
   assert.ok(content.includes(`"id":"${cachedId}"`), "dsh session id in the header");
   assert.ok(content.includes("Cached session"), "title in session_info");
 
-  // switchSession on a bridge file prints the resume command and exits
+  // switchSession resumes IN PROCESS (pi-tui's contract): the runtime swaps
+  // to a new session built on the resumed dsh agent.
   const { createRuntimeHost, formatResumeHint, sessionIdFromBridgeFile } = await import("../lib/bridge.js");
   assert.equal(sessionIdFromBridgeFile(file), cachedId);
-  const rt = createRuntimeHost(h.ctx, h.agent, "s", { sessionsDir, projcachePath: projcache, onExit: () => exits.push("exit") });
+  const resumedAgent = {
+    session: { header: { cwd: "/work" }, events: [], model: "deepseek-v4-flash", append() {} },
+    followup() {}, steer() {}, cancel() {},
+    ctx: { on: () => () => {} },
+    options: {},
+  };
+  const resumed = [];
+  h.ctx.agents = { resume: async () => resumedAgent };
+  const rt = createRuntimeHost(h.ctx, h.agent, "s", { sessionsDir, projcachePath: projcache });
+  let rebound = null;
+  rt.setRebindSession((s) => { rebound = s; });
   const result = await rt.switchSession(file);
-  assert.equal(result, undefined, "switchSession resolves after exiting");
-  assert.equal(exits.length, 1, "onExit invoked (clean stop + relaunch flow)");
-
-  // a non-bridge path still rejects with the guidance
-  await assert.rejects(rt.switchSession("/tmp/not-a-bridge-file.jsonl"), /--resume/);
-  // the current session is included so it can be resumed by id
-  const currentFile = join(sessionsDir, "s.jsonl");
-  assert.ok(!currentFile || true, "current session handled");
+  assert.equal(result.cancelled, false, "switchSession resolves without cancelling");
+  assert.ok(rebound, "rebind callback invoked with the new session (pi-tui finishSessionReplacement)");
+  assert.equal(rebound.sessionId, cachedId, "runtime rebound to the resumed session id");
+  // a non-bridge path cancels cleanly (no crash, no process exit)
+  const cancelled = await rt.switchSession("/tmp/not-a-bridge-file.jsonl");
+  assert.equal(cancelled.cancelled, true, "non-bridge path cancels");
 });
 
 test("replayHistory renders a resumed session's prior conversation through the bridge", () => {
