@@ -3,7 +3,9 @@ import { SessionId } from "@deepseek-ai/dsh-session";
 import z from "@deepseek-ai/schemastery";
 import { createRequire } from "node:module";
 import { writeSync } from "node:fs";
-import { createRuntimeHost } from "./bridge.js";
+import { createRuntimeHost, formatResumeHint } from "./bridge.js";
+
+export { formatResumeHint };
 
 /** Honor node `--require=<path>` preloads from NODE_OPTIONS at front-door boot.
  *
@@ -103,6 +105,7 @@ export const apply = async (ctx, config) => {
   // BUFFERED while the front door is up and flushed on dispose, so the
   // information is kept without corrupting the TUI. (Node's own crash traces
   // bypass console.* and stay visible.)
+
   const consoleBuffer = installConsoleBuffer();
 
   const sessionId = SessionId(config?.sessionId ?? "main");
@@ -145,10 +148,15 @@ export const apply = async (ctx, config) => {
     fullscreenExitOutput: config?.fullscreenExitOutput,
     mermaidRenderingMode: config?.mermaidRenderingMode,
     extensions: mountedExtensions,
+    consoleBuffer,
+    resumeHint: `To resume this session: dsh --profile tui-pi --resume ${sessionId}`,
   });
   const mode = new InteractiveMode(runtimeHost, {});
   await mode.init();
-  process.stderr.write(`[@dsh-pi/tui] InteractiveMode booted, session=${sessionId}\n`);
+  // Route our own status line through the buffer: a direct stderr write at
+  // boot lands inside the TUI frame (and, after a quit, inside the NEXT
+  // session's input box). It flushes at quit with the other reports.
+  console.log(`[@dsh-pi/tui] InteractiveMode booted, session=${sessionId}`);
 
   let running = true;
   const runPromise = mode.run().finally(() => {
@@ -159,12 +167,10 @@ export const apply = async (ctx, config) => {
     if (running) mode.stop();
     runtimeHost.dispose();
     consoleBuffer.restore();
-    // Synchronous fd write: pi's quit path calls process.exit(0), which would
-    // drop buffered async stderr writes — the mount reports must survive.
     consoleBuffer.flush();
   });
 
   await runPromise;
   runtimeHost.dispose();
-  process.stderr.write("[@dsh-pi/tui] InteractiveMode exited\n");
+  console.log("[@dsh-pi/tui] InteractiveMode exited");
 };

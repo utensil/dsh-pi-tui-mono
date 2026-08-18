@@ -524,3 +524,19 @@ test("mermaid markdown transformer renders box-drawing diagrams with the shim's 
   const offTx = createMermaidMarkdownTransformer({ getMode: () => offShim.settingsManager.getMermaidRenderingMode() });
   assert.ok(offTx(fence, { messageType: "assistant", isStreaming: true, availableWidth: 80 }).includes("mermaid"));
 });
+
+test("session.dispose flushes buffered reports and writes the dsh resume hint", async () => {
+  const { installConsoleBuffer, formatResumeHint } = await import("../lib/index.js");
+  const flushed = [];
+  const buffer = installConsoleBuffer({ sink: (line) => flushed.push(line) });
+  console.log("mount report during TUI");
+  const h = harness();
+  const shim = createPiSessionShim(h.ctx, h.agent, "s", { consoleBuffer: buffer });
+  assert.equal(flushed.length, 0, "nothing flushed while the TUI is up");
+  // pi's quit path calls runtimeHost.dispose() BEFORE process.exit — this is
+  // where buffered reports must surface, never inside the next session's TUI.
+  shim.dispose();
+  assert.equal(flushed.length, 1, "flush ran at dispose (regression: it was lost at quit)");
+  assert.ok(flushed[0].includes("mount report during TUI"));
+  assert.match(formatResumeHint("main-session-abc"), /^To resume this session: dsh --profile tui-pi --resume main-session-abc$/);
+});

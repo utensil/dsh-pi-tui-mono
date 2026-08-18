@@ -16,7 +16,7 @@
  */
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
 import { installModelSelection } from "@deepseek-ai/dsh-agent";
-import { writeFileSync } from "node:fs";
+import { writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname } from "node:path";
@@ -27,6 +27,13 @@ import { createRequire } from "node:module";
 
 const textBlocks = (content) =>
   (content ?? []).filter((b) => b.type === "text").map((b) => b.text).join("\n\n");
+
+/** The dsh resume command printed at TUI exit (pi's own formatResumeCommand
+ * cannot run: our shim reports sessions as non-persisted, and pi's generated
+ * command would say `pi --session ...`). */
+export function formatResumeHint(sessionId) {
+  return `To resume this session: dsh --profile tui-pi --resume ${sessionId}`;
+}
 
 /** Build a pi-shaped AssistantMessage with the given content blocks. */
 function assistantMessage(model, content, over = {}) {
@@ -167,6 +174,8 @@ export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
     tuiMode,
     fullscreenExitOutput,
     mermaidRenderingMode,
+    consoleBuffer,
+    resumeHint,
   } = options;
   const resolvedDefaultModel = defaultModel ?? agent.session?.model ?? agent.options?.model ?? "unknown";
   const available = availableModels.length > 0
@@ -703,6 +712,15 @@ export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
       disposeModelSelection();
       disposeAgentsMd();
       listeners.clear();
+      // pi's quit path calls runtimeHost.dispose() BEFORE process.exit, so this
+      // is the reliable point to flush buffered plugin reports (they must never
+      // reach the terminal mid-TUI, and they would be lost if left to a ctx
+      // dispose that process.exit skips) and to print the dsh resume hint.
+      if (consoleBuffer) {
+        consoleBuffer.restore();
+        consoleBuffer.flush();
+      }
+      writeSync(1, `${resumeHint ?? formatResumeHint(sessionId)}\n`);
     },
   };
 
@@ -718,7 +736,6 @@ export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
 export function createRuntimeHost(ctx, agent, sessionId, modelOptions = {}) {
   const session = createPiSessionShim(ctx, agent, sessionId, modelOptions);
   const cwd = session.cwd;
-
   const noopService = new Proxy(
     {},
     {

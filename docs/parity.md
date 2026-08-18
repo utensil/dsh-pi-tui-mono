@@ -186,12 +186,22 @@ verified live in the tui-pi profile:
   startup hints, and the changelog notice. The TUI shell remains pi's (the
   design premise); the terminal title and hardcoded "pi" strings are inherited.
 - **Terminal hygiene**: while the front door is up, `console.log`/`warn`/
-  `info`/`debug`/`error` are BUFFERED (capped, flushed on dispose) and
-  restored after. Stray terminal writes — even to stderr, which is the raw
-  terminal — land inside the InteractiveMode input box wherever the cursor
-  is, so plugin reports that deliberately use `console.log` (pi2dsh's mount
-  messages) must never reach the terminal mid-session. The information is
-  kept in the buffered flush, the extensions registry, and the process log.
+  `info`/`debug`/`error` are BUFFERED (capped) and restored after. Stray
+  terminal writes — even to stderr, which is the raw terminal — land inside
+  the InteractiveMode input box wherever the cursor is (and, after a quit,
+  inside the NEXT session's TUI), so plugin reports that deliberately use
+  `console.log` (pi2dsh's mount messages) and the front door's own status
+  lines are captured, never the terminal mid-session. The buffer is flushed
+  in `session.dispose()` — pi's quit path calls `runtimeHost.dispose()`
+  before `process.exit(0)`, so a `ctx` dispose would never fire — making the
+  reports appear cleanly after the TUI closes instead of being lost or
+  leaking into the next session.
+- **Resume hint**: at exit the front door prints
+  `To resume this session: dsh --profile tui-pi --resume <session-id>`
+  (synchronously, so pi's `process.exit(0)` cannot drop it). pi's own
+  `formatResumeCommand` cannot be used: the shim reports sessions as
+  non-persisted, and pi would generate `pi --session …` instead of the dsh
+  command.
 
 This monorepo's packages each run `node --test` (`pnpm test` at the root).
 Coverage per package:
