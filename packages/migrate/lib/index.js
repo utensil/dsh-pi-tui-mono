@@ -68,6 +68,7 @@ export function readPiHome(piHome) {
       theme: typeof settings.theme === "string" ? settings.theme : undefined,
       tuiMode: typeof settings.tuiMode === "string" ? settings.tuiMode : undefined,
       fullscreenExitOutput: typeof settings.fullscreenExitOutput === "string" ? settings.fullscreenExitOutput : undefined,
+      mermaidRenderingMode: typeof settings.markdown?.mermaid === "string" && settings.markdown.mermaid ? settings.markdown.mermaid : undefined,
     },
     themes,
     extensions: { npm: npmExtensions, files: fileExtensions },
@@ -111,6 +112,9 @@ export function planMigration(piHome, opts = {}) {
   }
   if (src.settings.fullscreenExitOutput) {
     plan.settings.fullscreenExitOutput = src.settings.fullscreenExitOutput;
+  }
+  if (src.settings.mermaidRenderingMode) {
+    plan.settings.mermaidRenderingMode = src.settings.mermaidRenderingMode;
   }
   if (src.settings.defaultThinkingLevel) {
     plan.settings.thinkingLevel = src.settings.defaultThinkingLevel;
@@ -179,6 +183,7 @@ export function renderProfilePatch(plan, profileDir, piHome) {
   }
   if (plan.settings.tuiMode) tui.push(`    tuiMode: ${plan.settings.tuiMode}`);
   if (plan.settings.fullscreenExitOutput) tui.push(`    fullscreenExitOutput: ${plan.settings.fullscreenExitOutput}`);
+  if (plan.settings.mermaidRenderingMode) tui.push(`    mermaidRenderingMode: ${plan.settings.mermaidRenderingMode}`);
   const themesDir = join(profileDir, "themes");
   if (plan.themes.length > 0 || plan.settings.theme) {
     if (plan.settings.theme) tui.push(`    theme: ${plan.settings.theme}`);

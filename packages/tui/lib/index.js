@@ -61,9 +61,11 @@ export const Config = z.object({
   // and a themes dir take precedence over the live ~/.pi/agent home.
   theme: z.string(),
   themesDir: z.string(),
-  // Migrated TUI mode (pi settings tuiMode/fullscreenExitOutput).
+  // Migrated TUI mode (pi settings tuiMode/fullscreenExitOutput) and markdown
+  // rendering mode (pi settings markdown.mermaid).
   tuiMode: z.string(),
   fullscreenExitOutput: z.string(),
+  mermaidRenderingMode: z.string(),
 });
 
 export const apply = async (ctx, config) => {
@@ -122,6 +124,7 @@ export const apply = async (ctx, config) => {
     themesDir: config?.themesDir,
     tuiMode: config?.tuiMode,
     fullscreenExitOutput: config?.fullscreenExitOutput,
+    mermaidRenderingMode: config?.mermaidRenderingMode,
     extensions: mountedExtensions,
   });
   const mode = new InteractiveMode(runtimeHost, {});

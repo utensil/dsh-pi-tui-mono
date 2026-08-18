@@ -17,6 +17,7 @@ function fixturePiHome() {
     theme: "railscasts",
     tuiMode: "fullscreen",
     fullscreenExitOutput: "resume-hint",
+    markdown: { mermaid: "streaming" },
   }));
   writeFileSync(join(dir, "themes", "railscasts.json"), JSON.stringify({ name: "railscasts", fg: "#e6e1dc" }));
   writeFileSync(join(dir, "extensions", "local-thing.ts"), "export default function (pi) { pi.on('session_start', () => {}); }");
@@ -37,6 +38,7 @@ test("readPiHome reads settings, themes, both kinds of extensions, and preloads 
   assert.equal(src.settings.theme, "railscasts");
   assert.equal(src.settings.tuiMode, "fullscreen");
   assert.equal(src.settings.fullscreenExitOutput, "resume-hint");
+  assert.equal(src.settings.mermaidRenderingMode, "streaming");
   assert.equal(src.themes.length, 1);
   assert.equal(src.themes[0].name, "railscasts");
   assert.deepEqual(src.extensions.npm.map((e) => e.name), ["pi-sample-ext"]);
@@ -62,6 +64,7 @@ test("planMigration maps pi provider, carries TUI settings, and reports preloads
   assert.equal(plan.settings.theme, "railscasts");
   assert.equal(plan.settings.tuiMode, "fullscreen");
   assert.equal(plan.settings.fullscreenExitOutput, "resume-hint");
+  assert.equal(plan.settings.mermaidRenderingMode, "streaming");
   assert.equal(plan.extensions.npm.length, 1);
   assert.equal(plan.extensions.files.length, 1);
   assert.equal(plan.preloads.length, 1);
@@ -80,6 +83,7 @@ test("renderProfilePatch emits id-targeted rows without hardcoded values", () =>
   assert.ok(patch.includes("theme: railscasts"), "theme from the source");
   assert.ok(patch.includes("tuiMode: fullscreen"), "tuiMode from the source");
   assert.ok(patch.includes("fullscreenExitOutput: resume-hint"), "fullscreenExitOutput from the source");
+  assert.ok(patch.includes("mermaidRenderingMode: streaming"), "mermaidRenderingMode from the source");
   assert.ok(patch.includes("- id: extensions"), "extensions row");
   assert.ok(patch.includes("pi-sample-ext"), "npm extension listed");
   assert.ok(!patch.includes("dsh-pi-tui-shim"), "no stale shim wording");

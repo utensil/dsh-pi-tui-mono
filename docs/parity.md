@@ -67,7 +67,11 @@ exactly pi's style), one block per step (no cross-step flooding).
 
 pi updates flow through automatically (the bundle imports pi as a dependency):
 - ` ```mermaid ` fences → **Unicode box-drawing diagrams** (grok-mermaid
-  transformer, `markdown.mermaid` setting, default `streaming`).
+  transformer, `markdown.mermaid` setting, default `streaming`). The shim
+  returns `getMermaidRenderingMode()` (bundle config → pi settings → default
+  `"streaming"`), so diagrams render live while the message streams, exactly
+  like pi — returning `undefined` would show raw code until the message
+  settled.
 - `$…$` / `$$…$$` LaTeX → **symbol/layout rendering** (pi-tui's LatexParser).
 - `![alt](path)` in assistant text shows alt text only — same as pi, by design.
 - Real images render via **tool results** (`Image` component) in terminals with

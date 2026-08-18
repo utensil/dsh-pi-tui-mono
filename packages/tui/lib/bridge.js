@@ -130,6 +130,7 @@ function piSettings() {
       theme: typeof s.theme === "string" && s.theme ? s.theme : undefined,
       tuiMode: typeof s.tuiMode === "string" && s.tuiMode ? s.tuiMode : undefined,
       fullscreenExitOutput: typeof s.fullscreenExitOutput === "string" && s.fullscreenExitOutput ? s.fullscreenExitOutput : undefined,
+      mermaidRenderingMode: typeof s.markdown?.mermaid === "string" && s.markdown.mermaid ? s.markdown.mermaid : undefined,
     };
   } catch {
     return {};
@@ -165,6 +166,7 @@ export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
     theme,
     tuiMode,
     fullscreenExitOutput,
+    mermaidRenderingMode,
   } = options;
   const resolvedDefaultModel = defaultModel ?? agent.session?.model ?? agent.options?.model ?? "unknown";
   const available = availableModels.length > 0
@@ -428,6 +430,10 @@ export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
               return options?.tuiMode ?? piSettings().tuiMode ?? "regular";
             case "getFullscreenExitOutput":
               return options?.fullscreenExitOutput ?? piSettings().fullscreenExitOutput ?? "transcript";
+            case "getMermaidRenderingMode":
+              // pi renders mermaid live while streaming (default "streaming");
+              // returning undefined would show raw code until the message settles.
+              return options?.mermaidRenderingMode ?? piSettings().mermaidRenderingMode ?? "streaming";
             case "getImageWidthCells":
               return 40;
             case "getShowHardwareCursor":
