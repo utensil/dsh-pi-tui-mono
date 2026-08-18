@@ -16,9 +16,8 @@
  */
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
 import { installModelSelection } from "@deepseek-ai/dsh-agent";
-import { writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync, writeSync, mkdirSync, rmSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -78,6 +77,81 @@ function translateDshContentBlock(block) {
 
 /** Directory of the local pi installation (the agent whose look we inherit). */
 const piAgentDir = () => join(homedir(), ".pi", "agent");
+/** Flat dir of pi-format session files the /resume picker reads. These are
+ * generated from dsh's own session storage so the picker lists DSH sessions
+ * (never pi's), and resuming one maps back to `dsh --resume <id>`. */
+const dshSessionsBridgeDir = (override) => override ?? join(homedir(), ".dsh", "sessions-bridge");
+/** dsh's persisted-session projection cache (id -> {identity, rows}). */
+const dshProjcachePath = (override) => override ?? join(homedir(), ".dsh", "storages", "session_projcache.json");
+
+/** Generate pi-format session files for dsh's persisted sessions so the
+ * /resume picker lists real dsh sessions (id + title from the projection
+ * cache), never pi's session files. Files are pruned when a session leaves
+ * the cache. The bridge dir is flat `*.jsonl`, one per session. */
+function writeSessionBridgeFiles(dir, sessions, current) {
+  if (!dir) return;
+  try {
+    mkdirSync(dir, { recursive: true });
+  } catch {
+    return;
+  }
+  const wanted = new Set();
+  const write = (id, cwd, title) => {
+    if (!id) return;
+    wanted.add(id);
+    const lines = [JSON.stringify({ type: "session", id, cwd, timestamp: Date.now() })];
+    if (title) lines.push(JSON.stringify({ type: "session_info", name: title }));
+    try {
+      writeFileSync(join(dir, `${id}.jsonl`), `${lines.join("\n")}\n`);
+    } catch {
+      /* best-effort */
+    }
+  };
+  for (const [id, entry] of Object.entries(sessions)) {
+    if (typeof id !== "string" || !id.startsWith("main-session-")) continue;
+    const identity = entry?.identity ?? {};
+    const title = entry?.rows?.title?.val;
+    write(id, identity.cwd, typeof title === "string" && title ? title : undefined);
+  }
+  if (current) write(current.id, current.cwd, current.title);
+  // Prune files for sessions no longer in the cache (or the current session).
+  try {
+    for (const f of readdirSync(dir)) {
+      if (!f.endsWith(".jsonl")) continue;
+      const id = f.slice(0, -".jsonl".length);
+      if (!wanted.has(id)) {
+        try {
+          rmSync(join(dir, f), { force: true });
+        } catch {
+          /* best-effort */
+        }
+      }
+    }
+  } catch {
+    /* best-effort */
+  }
+}
+
+/** Load dsh's projection cache: session id -> {identity, rows}. Never throws. */
+function loadDshSessions(projcachePath) {
+  try {
+    const cache = JSON.parse(readFileSync(projcachePath, "utf8"));
+    return cache?.tables?.sessions ?? {};
+  } catch {
+    return {};
+  }
+}
+
+/** The pi-format session id embedded in a bridge file (first line header). */
+export function sessionIdFromBridgeFile(path) {
+  try {
+    const first = readFileSync(path, "utf8").split("\n", 1)[0];
+    const header = JSON.parse(first);
+    return typeof header?.id === "string" ? header.id : undefined;
+  } catch {
+    return undefined;
+  }
+}
 const piThemeDir = (() => {
   try {
     // The pi package exports only the import condition; resolve it via ESM.
@@ -176,6 +250,9 @@ export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
     mermaidRenderingMode,
     consoleBuffer,
     resumeHint,
+    sessionsDir,
+    projcachePath,
+    onExit,
   } = options;
   const resolvedDefaultModel = defaultModel ?? agent.session?.model ?? agent.options?.model ?? "unknown";
   const available = availableModels.length > 0
@@ -213,6 +290,14 @@ export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
     : () => {};
 
   let sessionName = "";
+  // Seed the /resume picker's session list from dsh's own storage (never
+  // pi's), including the current session so it can be resumed by id.
+  const bridgeDir = dshSessionsBridgeDir(sessionsDir);
+  writeSessionBridgeFiles(
+    bridgeDir,
+    loadDshSessions(dshProjcachePath(projcachePath)),
+    sessionId ? { id: sessionId, cwd, title: undefined } : undefined,
+  );
   let steeringMessages = []; // pending steers for the TUI's queue display
 
   // Session state pi reads (footer model/context); model updates with setModel.
@@ -499,7 +584,7 @@ export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
         buildContextEntries: () => [],
         getTree: () => [],
         getLeafId: () => undefined,
-        getSessionDir: () => undefined,
+        getSessionDir: () => dshSessionsBridgeDir(sessionsDir),
         getSessionFile: () => undefined,
         getSessionId: () => sessionId,
         getSessionName: () => (sessionName || undefined),
@@ -640,6 +725,8 @@ export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
         } catch (err) {
           process.stderr.write(`[dsh-pi] setSessionName failed: ${err?.message ?? err}\n`);
         }
+        // Keep the /resume picker's entry for the current session fresh.
+        writeSessionBridgeFiles(bridgeDir, loadDshSessions(dshProjcachePath(projcachePath)), { id: sessionId, cwd, title: sessionName });
       }
     },
     setAutoCompactionEnabled() {},
@@ -707,6 +794,18 @@ export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
       getMarkdownTransformers: () => [],
     },
 
+    replayHistory() {
+      // A resumed dsh session loads its event log but does not re-emit it;
+      // replay it through the same translation so the TUI shows the prior
+      // conversation (called by the front door after the TUI is up).
+      for (const event of dshSession?.events ?? []) {
+        try {
+          onSessionEvent(dshSession, event);
+        } catch (err) {
+          process.stderr.write(`[dsh-pi] replayHistory event ${event.type} failed: ${err?.message ?? err}\n`);
+        }
+      }
+    },
     dispose() {
       disposeEvents();
       disposeModelSelection();
@@ -735,6 +834,7 @@ export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
  */
 export function createRuntimeHost(ctx, agent, sessionId, modelOptions = {}) {
   const session = createPiSessionShim(ctx, agent, sessionId, modelOptions);
+  const { onExit } = modelOptions;
   const cwd = session.cwd;
   const noopService = new Proxy(
     {},
@@ -772,7 +872,16 @@ export function createRuntimeHost(ctx, agent, sessionId, modelOptions = {}) {
     services,
     setRebindSession() {},
     setBeforeSessionInvalidate() {},
-    switchSession() {
+    switchSession(sessionPath) {
+      // The picker lists DSH sessions (bridge files generated from dsh's own
+      // storage); resuming means relaunching dsh against that session id.
+      const id = typeof sessionPath === "string" ? sessionIdFromBridgeFile(sessionPath) : undefined;
+      if (id && typeof onExit === "function") {
+        // Stop the TUI (leaving the alt screen) BEFORE the command is printed,
+        // otherwise the write lands inside the alt screen and is lost.
+        onExit(id);
+        return Promise.resolve();
+      }
       return Promise.reject(new Error("Session switching is not supported in dsh-pi. Start dsh with --resume <session-id> to resume a persisted session."));
     },
     newSession() {

@@ -57,11 +57,25 @@ exactly pi's style), one block per step (no cross-step flooding).
 
 ## Session persistence + resume
 
-- Sessions persist via the dsh storage stack (projection cache); `--resume
-  <session-id>` continues the conversation (verified live: resumed session
-  remembered prior turns; the startup wiring — `--resume <id>` → the resumed
-  session identity the agent-loop and the tui row read — is regression-tested
-  in `test/startup.test.js`).
+- Sessions persist via the dsh storage stack; `--resume <session-id>`
+  continues the conversation. On resume the prior conversation is REPLAYED
+  through the bridge (`replayHistory` — the loaded dsh event log goes through
+  the same translation, no model interaction), so the TUI shows the history
+  immediately (verified live: a resumed "Greeting session." rendered its prior
+  turns).
+- **`/resume` picker**: the shim's `sessionManager.getSessionDir()` returns a
+  flat bridge dir (`~/.dsh/sessions-bridge/`, configurable) populated with
+  pi-format session files generated from dsh's OWN storage (the projection
+  cache: id + title + cwd), pruned as sessions leave the cache — so the picker
+  lists real DSH sessions (verified live: 64 infra-land sessions with titles)
+  and NEVER pi's sessions (`~/.pi/agent/sessions/` is untouched).
+- Selecting a session maps back to the dsh command: the TUI stops cleanly and
+  prints `To resume this session: dsh --profile tui-pi --resume <id>`
+  (regression-tested: `switchSession` parses the bridge file id, `onExit`
+  stops + prints; `sessionIdFromBridgeFile` round-trips).
+- The startup wiring — `--resume <id>` → the resumed session identity the
+  agent-loop and the tui row read — is regression-tested in
+  `test/startup.test.js`; `replayHistory` in `test/bridge.test.js`.
 - Resume registers the agent asynchronously; the bundle waits for it instead of
   failing on the synchronous lookup.
 

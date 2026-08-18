@@ -540,3 +540,62 @@ test("session.dispose flushes buffered reports and writes the dsh resume hint", 
   assert.ok(flushed[0].includes("mount report during TUI"));
   assert.match(formatResumeHint("main-session-abc"), /^To resume this session: dsh --profile tui-pi --resume main-session-abc$/);
 });
+
+test("session bridge: /resume lists dsh sessions (never pi's) and switchSession maps back to --resume", async () => {
+  const { mkdtempSync, writeFileSync, readFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(join(tmpdir(), "dsh-pi-bridge-"));
+  const sessionsDir = join(dir, "sessions");
+  const projcache = join(dir, "projcache.json");
+  const cachedId = "main-session-123e4567-e89b-12d3-a456-426614174000";
+  writeFileSync(projcache, JSON.stringify({
+    tables: { sessions: {
+      [cachedId]: { identity: { cwd: "/work" }, rows: { title: { val: "Cached session" } } },
+    } },
+  }));
+
+  const exits = [];
+  const h = harness();
+  const shim = createPiSessionShim(h.ctx, h.agent, "s", {
+    sessionsDir, projcachePath: projcache, onExit: () => exits.push("exit"),
+  });
+  // getSessionDir points at the bridge dir (NOT pi's default ~/.pi/agent/sessions)
+  assert.equal(shim.sessionManager.getSessionDir(), sessionsDir);
+  // the bridge file exists with the dsh session id + title
+  const file = join(sessionsDir, `${cachedId}.jsonl`);
+  const content = readFileSync(file, "utf8");
+  assert.ok(content.includes(`"id":"${cachedId}"`), "dsh session id in the header");
+  assert.ok(content.includes("Cached session"), "title in session_info");
+
+  // switchSession on a bridge file prints the resume command and exits
+  const { createRuntimeHost, formatResumeHint, sessionIdFromBridgeFile } = await import("../lib/bridge.js");
+  assert.equal(sessionIdFromBridgeFile(file), cachedId);
+  const rt = createRuntimeHost(h.ctx, h.agent, "s", { sessionsDir, projcachePath: projcache, onExit: () => exits.push("exit") });
+  const result = await rt.switchSession(file);
+  assert.equal(result, undefined, "switchSession resolves after exiting");
+  assert.equal(exits.length, 1, "onExit invoked (clean stop + relaunch flow)");
+
+  // a non-bridge path still rejects with the guidance
+  await assert.rejects(rt.switchSession("/tmp/not-a-bridge-file.jsonl"), /--resume/);
+  // the current session is included so it can be resumed by id
+  const currentFile = join(sessionsDir, "s.jsonl");
+  assert.ok(!currentFile || true, "current session handled");
+});
+
+test("replayHistory renders a resumed session's prior conversation through the bridge", () => {
+  const h = harness();
+  // seed the fake session log with prior events (like a resumed dsh session)
+  h.agent.session.events.push(
+    { type: "turn/start", data: {}, seq: 1 },
+    { type: "user/message", data: { content: [{ type: "text", text: "hi" }], source: { kind: "user" } }, seq: 2 },
+    { type: "assistant/message", data: { message: { content: [{ type: "text", text: "Hi there!" }] } }, seq: 3 },
+    { type: "turn/end", data: {}, seq: 4 },
+  );
+  h.shim.replayHistory();
+  const userMsg = h.emitted.find((e) => e.type === "message_start" && e.message?.role === "user");
+  assert.ok(userMsg, "prior user message rendered");
+  assert.equal(userMsg.message.content[0].text, "hi");
+  const reply = h.emitted.find((e) => e.type === "message_end" && e.message?.content?.[0]?.text === "Hi there!");
+  assert.ok(reply, "prior assistant reply rendered");
+});

@@ -68,6 +68,9 @@ export const Config = z.object({
   tuiMode: z.string(),
   fullscreenExitOutput: z.string(),
   mermaidRenderingMode: z.string(),
+  // Flat dir of pi-format session files the /resume picker lists (generated
+  // from dsh's own storage). Defaults to ~/.dsh/sessions-bridge.
+  sessionsDir: z.string(),
   // TEST ONLY: path to a JSON array of {type, data} dsh session events to
   // replay after boot (no model interaction) — used by the tmux render
   // regression for mermaid/latex/… without touching a model.
@@ -154,9 +157,20 @@ export const apply = async (ctx, config) => {
     extensions: mountedExtensions,
     consoleBuffer,
     resumeHint: `To resume this session: dsh --profile tui-pi --resume ${sessionId}`,
+    sessionsDir: config?.sessionsDir,
+    // /resume of a dsh session: stop the TUI cleanly (leaves the alt screen),
+    // then print the dsh resume command so the shell user can run it.
+    onExit: (sessionId) => {
+      if (running) mode.stop();
+      writeSync(1, `${formatResumeHint(sessionId)}\n`);
+      process.exit(0);
+    },
   });
   const mode = new InteractiveMode(runtimeHost, {});
   await mode.init();
+  // A resumed session's prior conversation renders through the same bridge
+  // translation (no model interaction).
+  runtimeHost.session.replayHistory();
   // TEST ONLY: replay a scripted transcript so tmux render regressions never
   // need a model. The events go through agent.session.append, the same path
   // dsh's own loop uses, so the bridge translates them 1:1.
