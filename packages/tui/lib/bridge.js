@@ -811,19 +811,14 @@ export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
       }
     },
     dispose() {
+      // Teardown of THIS session's subscriptions. The console-buffer flush and
+      // the resume hint belong to the runtime's FINAL dispose (the quit path),
+      // NOT here: a session switch calls this mid-TUI and must not flush
+      // buffered reports into the terminal or print a stale resume hint.
       disposeEvents();
       disposeModelSelection();
       disposeAgentsMd();
       listeners.clear();
-      // pi's quit path calls runtimeHost.dispose() BEFORE process.exit, so this
-      // is the reliable point to flush buffered plugin reports (they must never
-      // reach the terminal mid-TUI, and they would be lost if left to a ctx
-      // dispose that process.exit skips) and to print the dsh resume hint.
-      if (consoleBuffer) {
-        consoleBuffer.restore();
-        consoleBuffer.flush();
-      }
-      writeSync(1, `${resumeHint ?? formatResumeHint(sessionId)}\n`);
     },
   };
 
@@ -847,6 +842,7 @@ export function createRuntimeHost(ctx, agent, sessionId, modelOptions = {}) {
   const makeSession = () => createPiSessionShim(ctx, currentAgent, currentId, modelOptions);
   let session = makeSession();
   const cwd = session.cwd;
+  const { consoleBuffer, resumeHint } = modelOptions;
   let rebindSession = null;
   const noopService = new Proxy(
     {},
@@ -911,8 +907,12 @@ export function createRuntimeHost(ctx, agent, sessionId, modelOptions = {}) {
       currentId = id;
       session = makeSession();
       services = rebuildServices();
-      session.replayHistory();
+      // pi-tui's finishSessionReplacement rebinds the UI to the new session
+      // (attaching its event listeners); ONLY THEN replay the history, or the
+      // prior-conversation events fire into the old session's listeners and
+      // are dropped.
       if (typeof rebindSession === "function") await rebindSession(session);
+      session.replayHistory();
       return { cancelled: false };
     },
     newSession() {
@@ -925,7 +925,15 @@ export function createRuntimeHost(ctx, agent, sessionId, modelOptions = {}) {
       return Promise.reject(new Error("Session import is not supported in dsh-pi (it is a dsh-powered front door)."));
     },
     dispose() {
+      // Final teardown (pi's quit path calls runtimeHost.dispose() BEFORE
+      // process.exit, so this is the reliable point): flush buffered plugin
+      // reports (never the terminal mid-TUI) and print the dsh resume hint.
       session.dispose();
+      if (consoleBuffer) {
+        consoleBuffer.restore();
+        consoleBuffer.flush();
+      }
+      writeSync(1, `${resumeHint ?? formatResumeHint(sessionId)}\n`);
     },
   };
 }

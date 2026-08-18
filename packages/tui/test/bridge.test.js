@@ -533,10 +533,14 @@ test("session.dispose flushes buffered reports and writes the dsh resume hint", 
   const h = harness();
   const shim = createPiSessionShim(h.ctx, h.agent, "s", { consoleBuffer: buffer });
   assert.equal(flushed.length, 0, "nothing flushed while the TUI is up");
-  // pi's quit path calls runtimeHost.dispose() BEFORE process.exit — this is
-  // where buffered reports must surface, never inside the next session's TUI.
+  // A session SWITCH (mid-TUI) must NOT flush buffered reports into the
+  // terminal; only the runtime's FINAL dispose (the quit path) does.
   shim.dispose();
-  assert.equal(flushed.length, 1, "flush ran at dispose (regression: it was lost at quit)");
+  assert.equal(flushed.length, 0, "switch teardown does not flush (no mid-TUI console output)");
+  const { createRuntimeHost } = await import("../lib/bridge.js");
+  const rt = createRuntimeHost(h.ctx, h.agent, "s", { consoleBuffer: buffer });
+  rt.dispose();
+  assert.equal(flushed.length, 1, "final dispose flushes (regression: it was lost at quit)");
   assert.ok(flushed[0].includes("mount report during TUI"));
   assert.match(formatResumeHint("main-session-abc"), /^To resume this session: dsh --profile tui-pi --resume main-session-abc$/);
 });
