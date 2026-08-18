@@ -644,3 +644,35 @@ test("replayHistory renders a resumed session's prior conversation through the b
   const reply = h.emitted.find((e) => e.type === "message_end" && e.message?.content?.[0]?.text === "Hi there!");
   assert.ok(reply, "prior assistant reply rendered");
 });
+
+test("bridge files carry real messages so the /resume picker shows turn counts (not '0 now')", async () => {
+  const { mkdtempSync, writeFileSync, mkdirSync, readFileSync, readdirSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const { zstdCompressSync } = await import("node:zlib");
+  const dir = mkdtempSync(join(tmpdir(), "dsh-pi-bridge-msgs-"));
+  const sessionsDir = join(dir, "sessions");
+  const projcache = join(dir, "projcache.json");
+  const id = "main-session-123e4567-e89b-12d3-a456-426614174000";
+  // fake dsh session log: two zstd frames (the persistence appends frames)
+  const frame1 = [
+    JSON.stringify({ type: "session", version: 0, id }),
+    JSON.stringify({ type: "user/message", seq: 1, time: 1700000000000, data: { content: [{ type: "text", text: "hi" }], source: { kind: "user" } } }),
+  ].join("\n") + "\n";
+  const frame2 = JSON.stringify({ type: "assistant/message", seq: 2, time: 1700000000100, data: { message: { content: [{ type: "text", text: "Hello there" }] } } }) + "\n";
+  const logDir = join(sessionsDir, "--fake-cwd--", id);
+  mkdirSync(logDir, { recursive: true });
+  writeFileSync(join(logDir, "session.jsonl.zstd"), Buffer.concat([zstdCompressSync(Buffer.from(frame1)), zstdCompressSync(Buffer.from(frame2))]));
+  writeFileSync(projcache, JSON.stringify({ tables: { sessions: { [id]: { identity: { cwd: "/work" }, rows: { title: { val: "T" } } } } } }));
+  const listeners = new Map();
+  const agent = { session: { header: { cwd: "/work" }, events: [], model: "x", append() {} }, followup(){}, steer(){}, cancel(){}, ctx: { on: () => () => {} } };
+  const ctx = { on: (n, cb) => listeners.set(n, cb), emit(){} };
+  const bridgeDir = join(dir, "bridge");
+  createPiSessionShim(ctx, agent, "s", { sessionsDir: bridgeDir, projcachePath: projcache, dshSessionsRoot: sessionsDir });
+  const content = readFileSync(join(bridgeDir, `${id}.jsonl`), "utf8");
+  const lines = content.split("\n").filter(Boolean);
+  assert.ok(lines.some((l) => l.includes('"type":"message"') && l.includes('"role":"user"') && l.includes("hi")), "user message line present");
+  assert.ok(lines.some((l) => l.includes('"type":"message"') && l.includes('"role":"assistant"') && l.includes("Hello there")), "assistant message line present");
+  // pi's buildSessionInfo counts these for the picker's turn count / activity time
+  assert.equal(lines.filter((l) => l.includes('"type":"message"')).length, 2);
+});

@@ -22,6 +22,7 @@ import { basename, dirname } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
+import { zstdDecompressSync } from "node:zlib";
 
 
 const textBlocks = (content) =>
@@ -88,7 +89,7 @@ const dshProjcachePath = (override) => override ?? join(homedir(), ".dsh", "stor
  * /resume picker lists real dsh sessions (id + title from the projection
  * cache), never pi's session files. Files are pruned when a session leaves
  * the cache. The bridge dir is flat `*.jsonl`, one per session. */
-function writeSessionBridgeFiles(dir, sessions, current) {
+function writeSessionBridgeFiles(dir, sessions, current, messagesRoot) {
   if (!dir) return;
   try {
     mkdirSync(dir, { recursive: true });
@@ -101,6 +102,17 @@ function writeSessionBridgeFiles(dir, sessions, current) {
     wanted.add(id);
     const lines = [JSON.stringify({ type: "session", id, cwd, timestamp: Date.now() })];
     if (title) lines.push(JSON.stringify({ type: "session_info", name: title }));
+    // Real message lines give the picker accurate turn counts, previews, and
+    // activity times (without them every session shows "0 now").
+    const messages = loadDshSessionMessages(id, messagesRoot);
+    for (const m of messages) {
+      lines.push(JSON.stringify({
+        type: "message",
+        id: `${id}-${lines.length}`,
+        timestamp: new Date(m.timestamp).toISOString(),
+        message: { role: m.role, content: m.content, timestamp: m.timestamp },
+      }));
+    }
     try {
       writeFileSync(join(dir, `${id}.jsonl`), `${lines.join("\n")}\n`);
     } catch {
@@ -144,6 +156,66 @@ function loadDshSessions(projcachePath) {
   } catch {
     return {};
   }
+}
+
+/** Decode a dsh session log (.jsonl.zstd): the persistence appends zstd
+ * frames, so each frame is decompressed separately and concatenated. */
+function decodeZstdFrames(buf) {
+  const MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
+  const parts = [];
+  let o = 0;
+  while (o < buf.length) {
+    const idx = buf.indexOf(MAGIC, o);
+    if (idx === -1) break;
+    let end = buf.indexOf(MAGIC, idx + 4);
+    if (end === -1) end = buf.length;
+    try {
+      parts.push(zstdDecompressSync(buf.subarray(idx, end)).toString("utf8"));
+    } catch {
+      break;
+    }
+    o = end;
+  }
+  return parts.join("");
+}
+
+/** Extract the user/assistant TEXT messages of a dsh session from its log, so
+ * the /resume picker shows real turn counts, previews, and activity times
+ * instead of "0 now". Best-effort; never throws. */
+function loadDshSessionMessages(id, base = join(homedir(), ".dsh", "sessions")) {
+  if (!id || !existsSync(base)) return [];
+  const messages = [];
+  try {
+    for (const cwdDir of readdirSync(base)) {
+      const file = join(base, cwdDir, id, "session.jsonl.zstd");
+      if (!existsSync(file)) continue;
+      const text = decodeZstdFrames(readFileSync(file));
+      for (const line of text.split("\n")) {
+        if (!line.trim()) continue;
+        let e;
+        try {
+          e = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (e.type === "user/message") {
+          const textBlocks = (e.data?.content ?? []).filter((b) => b.type === "text").map((b) => b.text).filter(Boolean);
+          if (textBlocks.length > 0) {
+            messages.push({ role: "user", content: textBlocks.map((text) => ({ type: "text", text })), timestamp: e.time ?? Date.now() });
+          }
+        } else if (e.type === "assistant/message") {
+          const textBlocks = (e.data?.message?.content ?? []).filter((b) => b.type === "text").map((b) => b.text).filter(Boolean);
+          if (textBlocks.length > 0) {
+            messages.push({ role: "assistant", content: textBlocks.map((text) => ({ type: "text", text })), timestamp: e.time ?? Date.now() });
+          }
+        }
+      }
+      break; // found this session's log
+    }
+  } catch {
+    /* best-effort */
+  }
+  return messages;
 }
 
 /** The pi-format session id embedded in a bridge file (first line header). */
@@ -256,6 +328,7 @@ export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
     resumeHint,
     sessionsDir,
     projcachePath,
+    dshSessionsRoot,
   } = options;
   const resolvedDefaultModel = defaultModel ?? agent.session?.model ?? agent.options?.model ?? "unknown";
   const available = availableModels.length > 0
@@ -300,6 +373,7 @@ export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
     bridgeDir,
     loadDshSessions(dshProjcachePath(projcachePath)),
     sessionId ? { id: sessionId, cwd, title: undefined } : undefined,
+    dshSessionsRoot,
   );
   let steeringMessages = []; // pending steers for the TUI's queue display
 
@@ -729,7 +803,7 @@ export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
           process.stderr.write(`[dsh-pi] setSessionName failed: ${err?.message ?? err}\n`);
         }
         // Keep the /resume picker's entry for the current session fresh.
-        writeSessionBridgeFiles(bridgeDir, loadDshSessions(dshProjcachePath(projcachePath)), { id: sessionId, cwd, title: sessionName });
+        writeSessionBridgeFiles(bridgeDir, loadDshSessions(dshProjcachePath(projcachePath)), { id: sessionId, cwd, title: sessionName }, dshSessionsRoot);
       }
     },
     setAutoCompactionEnabled() {},
