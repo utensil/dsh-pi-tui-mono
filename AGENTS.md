@@ -33,6 +33,10 @@ updates arrive without edits to this repo.
 - Parity target: the `tui` profile (`@dsh-tui/dsh-tui`) as the functional
   reference — same turns, tools, reasoning, `/resume`, and credentials work
   through this bundle's front door.
-- TUI verification happens in a real terminal: tmux session + `capture-pane`.
+- TUI verification happens in a real terminal: tmux session + `capture-pane`,
+  or herdr's `pane.read` socket API for panes outside tmux.
+- Regression tests: `npm test` (`node --test test/`) drives the bridge with
+  crafted dsh events and asserts the emitted pi events. `docs/parity.md` lists
+  the verified pi-TUI parity features and their test coverage.
 - CI-style checks: schema validation on boot, plugin load without loader
   errors, clean `--dump-config` composition.
