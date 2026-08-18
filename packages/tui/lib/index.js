@@ -82,7 +82,6 @@ export const Config = z.object({
   // Flat dir of pi-format session files the /resume picker lists (generated
   // from dsh's own storage). Defaults to ~/.dsh/sessions-bridge.
   sessionsDir: z.string(),
-  resumeStrategy: z.string().default("spawn"),
   // TEST ONLY: path to a JSON array of {type, data} dsh session events to
   // replay after boot (no model interaction) — used by the tmux render
   // regression for mermaid/latex/… without touching a model.
