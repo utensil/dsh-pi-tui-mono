@@ -69,10 +69,14 @@ exactly pi's style), one block per step (no cross-step flooding).
   cache: id + title + cwd), pruned as sessions leave the cache — so the picker
   lists real DSH sessions (verified live: 64 infra-land sessions with titles)
   and NEVER pi's sessions (`~/.pi/agent/sessions/` is untouched).
-- Selecting a session maps back to the dsh command: the TUI stops cleanly and
-  prints `To resume this session: dsh --profile tui-pi --resume <id>`
-  (regression-tested: `switchSession` parses the bridge file id, `onExit`
-  stops + prints; `sessionIdFromBridgeFile` round-trips).
+- Selecting a session resumes IN PLACE: the TUI stops cleanly and the front
+  door re-launches `dsh --profile tui-pi --resume <id>` in the same terminal
+  (`detached` + `unref` so the child survives the parent's exit; verified live:
+  the picked session's conversation replayed and the TUI stayed interactive).
+  The current session is not listed until it has persisted storage (dsh's
+  agent-loop refuses storage-less resume ids). Regression-tested:
+  `switchSession` parses the bridge file id and invokes `onExit`;
+  `sessionIdFromBridgeFile` round-trips.
 - The startup wiring — `--resume <id>` → the resumed session identity the
   agent-loop and the tui row read — is regression-tested in
   `test/startup.test.js`; `replayHistory` in `test/bridge.test.js`.
@@ -87,7 +91,11 @@ pi updates flow through automatically (the bundle imports pi as a dependency):
   returns `getMermaidRenderingMode()` (bundle config → pi settings → default
   `"streaming"`), so diagrams render live while the message streams, exactly
   like pi — returning `undefined` would show raw code until the message
-  settled.
+  settled. **Width guard (pi's own)**: a diagram whose rendered art is wider
+  than the terminal falls back to raw code (`art.width > availableWidth` —
+  identical behavior in pi; verified: a 222-col sequence diagram renders at
+  240-col terminals and raw at 160). The bundle persona therefore instructs
+  agents to keep diagrams narrow (short labels, few participants).
 - `$…$` / `$$…$$` LaTeX → **symbol/layout rendering** (pi-tui's LatexParser,
   applied unconditionally in pi-tui's markdown component — no shim surface to
   feed, so it is purely inherited; verified live).

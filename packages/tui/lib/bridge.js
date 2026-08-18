@@ -113,8 +113,12 @@ function writeSessionBridgeFiles(dir, sessions, current) {
     const title = entry?.rows?.title?.val;
     write(id, identity.cwd, typeof title === "string" && title ? title : undefined);
   }
-  if (current) write(current.id, current.cwd, current.title);
-  // Prune files for sessions no longer in the cache (or the current session).
+  // The CURRENT session is deliberately NOT written: until it has persisted
+  // storage it cannot be resumed (the dsh agent-loop refuses storage-less
+  // resume ids), and once it persists it appears here via the projection
+  // cache on the next boot.
+  if (current && sessions[current.id]) write(current.id, current.cwd, current.title);
+  // Prune files for sessions no longer in the cache.
   try {
     for (const f of readdirSync(dir)) {
       if (!f.endsWith(".jsonl")) continue;

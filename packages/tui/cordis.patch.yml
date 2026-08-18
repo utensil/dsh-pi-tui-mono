@@ -29,6 +29,11 @@
       To view image files (PNG/JPEG/WebP/GIF), always use the read_image tool.
       The read tool only handles UTF-8 text and rejects binary files.
 
+      When you produce mermaid diagrams, keep them NARROW: the TUI renders them
+      as Unicode box-drawing, and a diagram wider than the terminal falls back
+      to raw code. Prefer graph diagrams with short labels over wide sequence
+      diagrams (3 participants max, short message text).
+
 # Full thinking at max effort (mirrors @dsh-tui/dsh-tui). Key and endpoint
 # resolve per request from the credentials store.
 - id: llm-deepseek

@@ -3,6 +3,7 @@ import { SessionId } from "@deepseek-ai/dsh-session";
 import z from "@deepseek-ai/schemastery";
 import { createRequire } from "node:module";
 import { writeSync, readFileSync } from "node:fs";
+import { spawn } from "node:child_process";
 import { createRuntimeHost, formatResumeHint } from "./bridge.js";
 
 export { formatResumeHint };
@@ -159,11 +160,26 @@ export const apply = async (ctx, config) => {
     resumeHint: `To resume this session: dsh --profile tui-pi --resume ${sessionId}`,
     sessionsDir: config?.sessionsDir,
     // /resume of a dsh session: stop the TUI cleanly (leaves the alt screen),
-    // then print the dsh resume command so the shell user can run it.
+    // then re-launch dsh against that session in the SAME terminal so the
+    // switch happens in place (the new process replays the conversation).
     onExit: (sessionId) => {
+      // Stop the TUI cleanly (leaves the alt screen + restores the terminal),
+      // then re-launch dsh against that session in the SAME terminal so the
+      // switch happens in place. detached + unref keep the child alive when
+      // this parent exits (without them it dies with the parent's process
+      // group); the 500ms delay lets the child grab the terminal first.
       if (running) mode.stop();
-      writeSync(1, `${formatResumeHint(sessionId)}\n`);
-      process.exit(0);
+      writeSync(2, `[@dsh-pi/tui] resuming ${sessionId}...\n`);
+      const child = spawn("dsh", ["--profile", "tui-pi", "--resume", sessionId], {
+        stdio: "inherit",
+        env: process.env,
+        detached: true,
+      });
+      child.on("error", (err) => {
+        writeSync(2, `[@dsh-pi/tui] resume spawn failed: ${err?.message ?? err}\n`);
+      });
+      child.unref();
+      setTimeout(() => process.exit(0), 500);
     },
   });
   const mode = new InteractiveMode(runtimeHost, {});
