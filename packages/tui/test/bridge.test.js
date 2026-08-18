@@ -306,8 +306,22 @@ test("steer queues for TUI display (queue_update) and routes to dsh agent", () =
   assert.equal(h.steers.length, 1);
   assert.equal(h.steers[0].content[0].text, "keep going");
   assert.equal(h.steers[0].source.kind, "user");
-  // delivering a matching user/message clears the queue
+  // delivering the matching user/message keeps the queue displayed (the
+  // "Steering: <msg>" + dequeue-hint stays visible) while the turn processes it
   h.dsh({ type: "user/message", data: { content: [{ type: "text", text: "keep going" }], source: { kind: "user" } } });
+  assert.deepEqual(h.shim.getSteeringMessages(), ["keep going"], "queue persists through the processing turn");
+  // a NEW user message that is not the pending steer takes over and clears it
+  h.dsh({ type: "user/message", data: { content: [{ type: "text", text: "different" }], source: { kind: "user" } } });
+  assert.deepEqual(h.shim.getSteeringMessages(), [], "a new user message clears the queue");
+  // the processing turn ending clears it too
+  h.shim.steer("again");
+  h.dsh({ type: "user/message", data: { content: [{ type: "text", text: "again" }], source: { kind: "user" } } });
+  h.dsh({ type: "turn/end", data: { turn: 1, reason: { kind: "completed" } } });
+  assert.deepEqual(h.shim.getSteeringMessages(), [], "turn/end clears the delivered steers");
+  // clearQueue returns + clears (pi's Option+Up restore path)
+  h.shim.steer("restore me");
+  const cleared = h.shim.clearQueue();
+  assert.deepEqual(cleared.steering, ["restore me"]);
   assert.deepEqual(h.shim.getSteeringMessages(), []);
 });
 

@@ -174,7 +174,6 @@ export const apply = async (ctx, config) => {
     mermaidRenderingMode: config?.mermaidRenderingMode,
     extensions: mountedExtensions,
     consoleBuffer,
-    resumeHint: `To resume this session: dsh --profile tui-pi --resume ${sessionId}`,
     sessionsDir: config?.sessionsDir,
   });
 

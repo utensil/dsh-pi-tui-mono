@@ -434,12 +434,12 @@ export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
       case "user/message": {
         // A delivered user turn clears pending steering entries (pi splices
         // _steeringMessages when the agent claims the message).
-        if (steeringMessages.length > 0) {
+        if (steeringMessages.length > 0 && event.data?.source?.kind === "user") {
           const text = textBlocks(event.data?.content);
-          if (text && steeringMessages.includes(text)) {
-            steeringMessages = steeringMessages.filter((m) => m !== text);
-            emit({ type: "queue_update" });
-          } else if (event.data?.source?.kind === "user") {
+          // A steered message stays displayed (Steering: <msg> + the dequeue
+          // hint) until the turn processing it ends; only a NEW user message
+          // that is not a pending steer takes over and clears the queue.
+          if (!(text && steeringMessages.includes(text))) {
             steeringMessages = [];
             emit({ type: "queue_update" });
           }
@@ -546,6 +546,11 @@ export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
         break;
       }
       case "turn/end": {
+        // The turn consumed any delivered steers; drop the queue display.
+        if (steeringMessages.length > 0) {
+          steeringMessages = [];
+          emit({ type: "queue_update" });
+        }
         if (assistantStarted) {
           // A step was still streaming when the turn ended without its
           // assistant/message boundary; settle the pending content.
@@ -809,7 +814,12 @@ export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
     setAutoCompactionEnabled() {},
     setFollowUpMode() {},
     setSteeringMode() {},
-    clearQueue() {},
+    clearQueue() {
+      const result = { steering: [...steeringMessages], followUp: [] };
+      steeringMessages = [];
+      emit({ type: "queue_update" });
+      return result;
+    },
     compact() {},
     reload() {},
     executeBash() {},
@@ -915,7 +925,7 @@ export function createRuntimeHost(ctx, agent, sessionId, modelOptions = {}) {
   const makeSession = () => createPiSessionShim(ctx, currentAgent, currentId, modelOptions);
   let session = makeSession();
   const cwd = session.cwd;
-  const { consoleBuffer, resumeHint } = modelOptions;
+  const { consoleBuffer } = modelOptions;
   let rebindSession = null;
   const noopService = new Proxy(
     {},
@@ -1006,7 +1016,9 @@ export function createRuntimeHost(ctx, agent, sessionId, modelOptions = {}) {
         consoleBuffer.restore();
         consoleBuffer.flush();
       }
-      writeSync(1, `${resumeHint ?? formatResumeHint(sessionId)}\n`);
+      // The ACTIVE session (currentId) — after an in-process /resume switch
+      // the original sessionId is stale and pointing at it would be empty.
+      writeSync(1, `${formatResumeHint(currentId)}\n`);
     },
   };
 }
