@@ -58,8 +58,10 @@ exactly pi's style), one block per step (no cross-step flooding).
 ## Session persistence + resume
 
 - Sessions persist via the dsh storage stack (projection cache); `--resume
-  <session-id>` continues the conversation (verified: resumed session
-  remembered prior turns).
+  <session-id>` continues the conversation (verified live: resumed session
+  remembered prior turns; the startup wiring — `--resume <id>` → the resumed
+  session identity the agent-loop and the tui row read — is regression-tested
+  in `test/startup.test.js`).
 - Resume registers the agent asynchronously; the bundle waits for it instead of
   failing on the synchronous lookup.
 
@@ -72,7 +74,9 @@ pi updates flow through automatically (the bundle imports pi as a dependency):
   `"streaming"`), so diagrams render live while the message streams, exactly
   like pi — returning `undefined` would show raw code until the message
   settled.
-- `$…$` / `$$…$$` LaTeX → **symbol/layout rendering** (pi-tui's LatexParser).
+- `$…$` / `$$…$$` LaTeX → **symbol/layout rendering** (pi-tui's LatexParser,
+  applied unconditionally in pi-tui's markdown component — no shim surface to
+  feed, so it is purely inherited; verified live).
 - `![alt](path)` in assistant text shows alt text only — same as pi, by design.
 - Real images render via **tool results** (`Image` component) in terminals with
   image protocols (Kitty/iTerm2/Warp); pi disables them under tmux.
@@ -220,6 +224,8 @@ Coverage per package:
 | getExtensions | mounted extension packages surface in pi's extension list |
 | node preloads | `loadNodePreloads` honors `--require` (module-cache idempotent, fail-safe) |
 | console buffering | plugin `console.*` reports buffered, never the terminal, flushed on restore |
+| startup --resume | `--resume <id>` provides the resumed session identity; fresh id otherwise |
+| mermaid integration | pi's mermaid transformer renders box-drawing with the shim's mode; "off" passes raw |
 
 ### packages/extensions (test/extensions.test.js)
 
@@ -229,6 +235,7 @@ Coverage per package:
 | unresolvable package | reported `failed` with error, mount event emitted |
 | surfaces off | mount events suppressed, registry intact |
 | localExtensions | mounted through the same path as packages |
+| mount E2E | a real fixture pi package's tool executes through real dsh services (`ctx.tools.execute`) |
 
 ### packages/migrate (test/migrate.test.js)
 

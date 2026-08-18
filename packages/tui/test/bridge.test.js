@@ -506,3 +506,21 @@ test("getExtensions surfaces mounted extension packages to pi's extension list",
   assert.equal(exts[0].name, "pi-test-ext");
   assert.equal(exts[0].source, "dsh-pi-extensions");
 });
+
+test("mermaid markdown transformer renders box-drawing diagrams with the shim's mode (integration)", async () => {
+  const { fileURLToPath } = await import("node:url");
+  const entry = fileURLToPath(await import.meta.resolve("@earendil-works/pi-coding-agent"));
+  const base = entry.replace("/dist/index.js", "");
+  const { createMermaidMarkdownTransformer } = await import(`${base}/dist/modes/interactive/components/mermaid.js`);
+  const h = harness();
+  // The shim's settingsManager is what InteractiveMode wires as getMode.
+  const shim = createPiSessionShim(h.ctx, h.agent, "s", { mermaidRenderingMode: "streaming" });
+  const tx = createMermaidMarkdownTransformer({ getMode: () => shim.settingsManager.getMermaidRenderingMode() });
+  const fence = "```mermaid\ngraph LR\n  A --> B\n  B --> C\n```";
+  const rendered = tx(fence, { messageType: "assistant", isStreaming: true, availableWidth: 80 });
+  assert.ok(rendered.includes("┌") || rendered.includes("─"), "box-drawing rendered while streaming");
+  // mode "off" passes the fence through unchanged (no diagram, no loss)
+  const offShim = createPiSessionShim(h.ctx, h.agent, "s", { mermaidRenderingMode: "off" });
+  const offTx = createMermaidMarkdownTransformer({ getMode: () => offShim.settingsManager.getMermaidRenderingMode() });
+  assert.ok(offTx(fence, { messageType: "assistant", isStreaming: true, availableWidth: 80 }).includes("mermaid"));
+});
