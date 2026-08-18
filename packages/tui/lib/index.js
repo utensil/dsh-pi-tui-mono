@@ -33,6 +33,19 @@ export const Config = z.object({
 });
 
 export const apply = async (ctx, config) => {
+  // The TUI owns stdout exclusively once InteractiveMode takes the screen.
+  // Anything printed to stdout after that (e.g. pi2dsh's deliberate
+  // console.log/console.warn mount reports) lands inside the input box and
+  // floods the cursor. Route console output to stderr for the lifetime of the
+  // front door; dsh's own logging already goes to the logger (stderr).
+  const consoleRedirects = ["log", "warn", "info", "debug", "error"].map((level) => {
+    const original = console[level];
+    console[level] = (...args) => {
+      process.stderr.write(`[console.${level}] ${args.map(String).join(" ")}\n`);
+    };
+    return [level, original];
+  });
+
   const sessionId = SessionId(config?.sessionId ?? "main");
   // The agent may register asynchronously (resume loads a persisted session
   // through the sessionPersistence service); wait for it instead of failing
@@ -80,6 +93,9 @@ export const apply = async (ctx, config) => {
   ctx.on("dispose", () => {
     if (running) mode.stop();
     runtimeHost.dispose();
+    for (const [level, original] of consoleRedirects) {
+      console[level] = original;
+    }
   });
 
   await runPromise;

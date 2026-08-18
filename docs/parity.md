@@ -144,6 +144,12 @@ layer). `@dsh-pi/extensions` adds:
 - `getQuietStartup`/`getCollapseChangelog` → true hides the "pi vX" banner,
   startup hints, and the changelog notice. The TUI shell remains pi's (the
   design premise); the terminal title and hardcoded "pi" strings are inherited.
+- **stdout hygiene**: while the front door is up, `console.log`/`warn`/`info`/
+  `debug`/`error` are redirected to stderr (with a `[console.<level>]` prefix)
+  and restored on dispose. Without this, plugin reports that deliberately use
+  `console.log` (pi2dsh's mount messages) land inside the InteractiveMode
+  input box and flood the cursor out of it. Messages stay visible in the
+  process's stderr/log.
 
 This monorepo's packages each run `node --test` (`pnpm test` at the root).
 Coverage per package:

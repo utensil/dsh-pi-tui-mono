@@ -59,6 +59,22 @@ if [ -d "$repo/node_modules/.pnpm" ]; then
   [ -n "$pi2dsh_dir" ] && rm -f "$profile/node_modules/pi2dsh" && ln -s "$pi2dsh_dir" "$profile/node_modules/pi2dsh"
 fi
 
+# The profile node_modules carries STALE pnpm copies of @earendil-works/* and
+# @deepseek-ai/* (from an earlier `dsh plugin add`), and dsh's bundle loader
+# resolves bundle imports against the profile — so force-link the global scope
+# there as well, guaranteeing every run uses the INSTALLED pi (update-proof).
+# A plain `ln -sfn` cannot replace a real directory, so remove the stale copy
+# first (these paths are exactly the scope dirs this script manages).
+mkdir -p "$profile/node_modules/@deepseek-ai" "$profile/node_modules/@earendil-works"
+for scope in @deepseek-ai @earendil-works; do
+  for p in "$global/$scope"/*; do
+    [ -d "$p" ] || continue
+    target="$profile/node_modules/$scope/$(basename "$p")"
+    [ -d "$target" ] && rm -rf "$target"
+    ln -s "$p" "$target"
+  done
+done
+
 # Point the profile's bundle list at the workspace packages.
 python3 - "$profile" <<'EOF'
 import json, sys
