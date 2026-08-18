@@ -285,3 +285,42 @@ test("unsupported session operations reject with descriptive messages", async ()
   await assert.rejects(host.newSession(), /not supported in dsh-pi/);
   await assert.rejects(host.importFromJsonl(), /not supported in dsh-pi/);
 });
+
+test("steer queues for TUI display (queue_update) and routes to dsh agent", () => {
+  const h = harness();
+  h.shim.steer("keep going");
+  // queue_update emitted for the TUI's pending display
+  assert.ok(h.emitted.some((e) => e.type === "queue_update"), "queue_update emitted");
+  // steering messages surfaced to the TUI
+  assert.deepEqual(h.shim.getSteeringMessages(), ["keep going"]);
+  // routed to the dsh agent
+  assert.equal(h.steers.length, 1);
+  assert.equal(h.steers[0].content[0].text, "keep going");
+  assert.equal(h.steers[0].source.kind, "user");
+  // delivering a matching user/message clears the queue
+  h.dsh({ type: "user/message", data: { content: [{ type: "text", text: "keep going" }], source: { kind: "user" } } });
+  assert.deepEqual(h.shim.getSteeringMessages(), []);
+});
+
+test("steered message becomes a sent user message after the tool step", () => {
+  const h = harness();
+  h.dsh({ type: "turn/start", data: { turn: 1 } });
+  h.dsh({ type: "step/start", data: { turn: 1, step: 1 } });
+  h.dsh(reasonChunk("tool first"));
+  h.dsh({ type: "assistant/message", data: { message: { content: [{ type: "reasoning", text: "tool first" }, { type: "tool-call", id: "c1", name: "bash", arguments: "{}" }] } } });
+  h.dsh({ type: "tool/call", data: { callId: "c1", name: "bash", arguments: "{}" } });
+  h.dsh({ type: "tool/result", data: { message: { source: { callId: "c1" }, content: [{ type: "tool-result", toolCallId: "c1", content: [{ type: "text", text: "" }], isError: false }] } } });
+  // steer while the turn is active
+  h.shim.steer("now continue");
+  // the dsh driver surfaces the steered message as a user/message in the next step
+  h.dsh({ type: "step/start", data: { turn: 1, step: 2 } });
+  h.dsh({ type: "user/message", data: { content: [{ type: "text", text: "now continue" }], source: { kind: "user" } } });
+  h.dsh(textChunk("continuing"));
+  h.dsh({ type: "assistant/message", data: { message: { content: [{ type: "text", text: "continuing" }] } } });
+  h.dsh({ type: "turn/end", data: { turn: 1, reason: { kind: "completed" } } });
+  // the steered text renders as a user message in the chat
+  const userMsgs = h.emitted.filter((e) => e.type === "message_start" && e.message?.role === "user");
+  assert.ok(userMsgs.some((m) => m.message.content[0].text === "now continue"), "steered text rendered as user message");
+  // and the steering queue drained
+  assert.deepEqual(h.shim.getSteeringMessages(), []);
+});

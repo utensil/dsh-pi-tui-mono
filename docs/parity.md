@@ -84,6 +84,18 @@ which clears the inbox and aborts the running phase.
   `/login`, `/logout`, `/share`, `/clone`, `/trust`, `/settings`, `/tree`,
   `/fork`, `/session` pickers.
 
+## Images: read vs read_image (dsh design)
+
+dsh deliberately splits file access: the `read` tool is UTF-8 text only and
+rejects binary files at the filesystem layer (`dsh-fs-local`, NUL-byte
+detection) — unlike pi's `read`, which auto-detects images. Images display
+through the dedicated `read_image` tool, which is **gated on the model's image
+capability** (`deepseek-v4-flash` has none; a vision-capable model would
+return an image block that the TUI renders in the tool card). The bundle adds
+system-prompt guidance so agents use `read_image` for image paths instead of
+hitting `read`'s binary rejection. The bridge itself renders image blocks
+faithfully (unit-tested).
+
 ## dsh identity (not pi)
 
 - `PI_OFFLINE=1` suppresses pi's "Update Available / run pi update" popup and
