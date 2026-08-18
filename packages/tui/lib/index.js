@@ -3,10 +3,20 @@ import { SessionId } from "@deepseek-ai/dsh-session";
 import z from "@deepseek-ai/schemastery";
 import { createRequire } from "node:module";
 import { writeSync, readFileSync } from "node:fs";
-import { spawn } from "node:child_process";
 import { createRuntimeHost, formatResumeHint } from "./bridge.js";
 
 export { formatResumeHint };
+
+/** pi-tui's escape timeout defaults to 10ms, which makes split-arriving CSI
+ * sequences (e.g. mouse events under load) flush the bare ESC before the rest
+ * arrives — the remainder then lands in the input box as raw text. Set a
+ * saner window unless the operator already tuned it (their value wins). */
+export function ensureEscapeTimeout(value = "150") {
+  if (process.env.PI_TUI_ESC_TIMEOUT === undefined) {
+    process.env.PI_TUI_ESC_TIMEOUT = value;
+  }
+  return process.env.PI_TUI_ESC_TIMEOUT;
+}
 
 /** Honor node `--require=<path>` preloads from NODE_OPTIONS at front-door boot.
  *
@@ -72,10 +82,6 @@ export const Config = z.object({
   // Flat dir of pi-format session files the /resume picker lists (generated
   // from dsh's own storage). Defaults to ~/.dsh/sessions-bridge.
   sessionsDir: z.string(),
-  // How /resume hands off to the resumed session: "spawn" re-launches dsh in
-  // the same terminal automatically (TUI stop -> shell -> child TUI);
-  // "command" prints the resume command and exits, letting the user relaunch
-  // cleanly (useful when the terminal frontend mishandles the transition).
   resumeStrategy: z.string().default("spawn"),
   // TEST ONLY: path to a JSON array of {type, data} dsh session events to
   // replay after boot (no model interaction) — used by the tmux render
@@ -127,9 +133,7 @@ export const apply = async (ctx, config) => {
   // escape sequences (mouse events under load) flush the bare ESC before the
   // rest arrives; the remainder then lands in the input box as text. A saner
   // window (unless the operator already tuned it) assembles them correctly.
-  if (process.env.PI_TUI_ESC_TIMEOUT === undefined) {
-    process.env.PI_TUI_ESC_TIMEOUT = "150";
-  }
+  ensureEscapeTimeout();
   const sessionId = SessionId(config?.sessionId ?? "main");
   // Load NODE_OPTIONS --require preloads (e.g. syntax-highlighting grammars)
   // before the TUI renders anything.

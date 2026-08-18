@@ -256,7 +256,6 @@ export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
     resumeHint,
     sessionsDir,
     projcachePath,
-    onExit,
   } = options;
   const resolvedDefaultModel = defaultModel ?? agent.session?.model ?? agent.options?.model ?? "unknown";
   const available = availableModels.length > 0

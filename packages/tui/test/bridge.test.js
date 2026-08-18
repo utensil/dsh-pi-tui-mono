@@ -583,17 +583,49 @@ test("session bridge: /resume lists dsh sessions (never pi's) and switchSession 
     options: {},
   };
   const resumed = [];
+  // the resumed dsh session carries its persisted event log
+  resumedAgent.session.events.push(
+    { type: "turn/start", data: {}, seq: 1 },
+    { type: "user/message", data: { content: [{ type: "text", text: "hi" }], source: { kind: "user" } }, seq: 2 },
+    { type: "assistant/message", data: { message: { content: [{ type: "text", text: "Welcome back" }] } }, seq: 3 },
+    { type: "turn/end", data: {}, seq: 4 },
+  );
   h.ctx.agents = { resume: async () => resumedAgent };
   const rt = createRuntimeHost(h.ctx, h.agent, "s", { sessionsDir, projcachePath: projcache });
   let rebound = null;
-  rt.setRebindSession((s) => { rebound = s; });
+  const rebindEvents = [];
+  rt.setRebindSession((s) => {
+    rebound = s;
+    // pi-tui's finishSessionReplacement attaches the NEW session's listeners
+    // here; events replayed BEFORE this are dropped (the regression).
+    s.subscribe((ev) => rebindEvents.push(ev));
+  });
   const result = await rt.switchSession(file);
   assert.equal(result.cancelled, false, "switchSession resolves without cancelling");
   assert.ok(rebound, "rebind callback invoked with the new session (pi-tui finishSessionReplacement)");
   assert.equal(rebound.sessionId, cachedId, "runtime rebound to the resumed session id");
+  assert.ok(
+    rebindEvents.some((e) => e.type === "message_end" && e.message?.content?.[0]?.text === "Welcome back"),
+    "resumed history replayed AFTER the rebind reached the new session's listeners (regression: replay-before-rebind dropped it)",
+  );
   // a non-bridge path cancels cleanly (no crash, no process exit)
   const cancelled = await rt.switchSession("/tmp/not-a-bridge-file.jsonl");
   assert.equal(cancelled.cancelled, true, "non-bridge path cancels");
+});
+
+test("ensureEscapeTimeout sets a saner pi-tui escape window but honors an operator value", async () => {
+  const prev = process.env.PI_TUI_ESC_TIMEOUT;
+  try {
+    delete process.env.PI_TUI_ESC_TIMEOUT;
+    const { ensureEscapeTimeout } = await import("../lib/index.js");
+    assert.equal(ensureEscapeTimeout(), "150", "default applied when unset");
+    assert.equal(ensureEscapeTimeout(), "150", "idempotent");
+    process.env.PI_TUI_ESC_TIMEOUT = "42";
+    assert.equal(ensureEscapeTimeout(), "42", "operator value wins");
+  } finally {
+    if (prev === undefined) delete process.env.PI_TUI_ESC_TIMEOUT;
+    else process.env.PI_TUI_ESC_TIMEOUT = prev;
+  }
 });
 
 test("replayHistory renders a resumed session's prior conversation through the bridge", () => {
