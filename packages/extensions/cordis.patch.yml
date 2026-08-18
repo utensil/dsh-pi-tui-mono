@@ -1,0 +1,18 @@
+# @dsh-pi/extensions — pi extensions as dsh plugins, thin on pi2dsh.
+#
+# Rows registered over @deepseek-ai/dsh-base:
+#   - pi2dsh      : the Pi-Host ABI engine (upstream). Mounts every Pi package
+#                   installed in the profile; the profile layer can pin
+#                   `packages` / `exclude` in this row's config.
+#   - extensions  : our thin layer — local extension package dirs, the mount
+#                   registry (ctx.piExtensions), and TUI-bound extension events
+#                   (@dsh-pi/tui renders them).
+
+- insert:
+    - id: pi2dsh
+      name: "pi2dsh"
+
+    - id: extensions
+      name: "@dsh-pi/extensions"
+      config:
+        surfaces: true

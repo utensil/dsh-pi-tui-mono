@@ -1,0 +1,28 @@
+{
+  "name": "@dsh-pi/extensions",
+  "version": "0.1.0",
+  "description": "Pi extensions as dsh plugins — a thin cordis layer over pi2dsh: mounts local extension packages, exposes a mount registry, and emits TUI-bound extension events for @dsh-pi/tui.",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@deepseek-ai/cordis": "latest",
+    "@deepseek-ai/schemastery": "latest",
+    "pi2dsh": "^0.12.4"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}
