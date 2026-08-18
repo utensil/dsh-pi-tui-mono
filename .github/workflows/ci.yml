@@ -1,0 +1,35 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Unit + regression suite: no model interaction anywhere in these tests.
+      - run: pnpm test
+
+      # Extension smoke: the SAME short list as the reference device's pi
+      # install (~/.pi/agent/npm/node_modules) — each package must load and
+      # register through the adapter. The packages are devDependencies, so
+      # resolveExtensionDir() finds them in node_modules in CI.
+      - run: node --test packages/extensions/test/smoke.test.js

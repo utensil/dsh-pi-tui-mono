@@ -1,7 +1,7 @@
 {
   "name": "@dsh-pi/extensions",
   "version": "0.1.0",
-  "description": "Pi extensions as dsh plugins — a thin cordis layer over pi2dsh: mounts local extension packages, exposes a mount registry, and emits TUI-bound extension events for @dsh-pi/tui.",
+  "description": "Pi extensions as dsh plugins \u2014 a thin cordis layer over pi2dsh: mounts local extension packages, exposes a mount registry, and emits TUI-bound extension events for @dsh-pi/tui.",
   "license": "MIT",
   "type": "module",
   "main": "lib/index.js",
@@ -24,5 +24,13 @@
   },
   "scripts": {
     "test": "node --test"
+  },
+  "devDependencies": {
+    "pi-codex-goal": "0.2.0",
+    "pi-web-access": "0.23.0",
+    "pi-sidequest": "1.0.2",
+    "pi-boomerang": "0.7.0",
+    "pi-subagents": "0.50.0",
+    "pi-dynamic-workflows": "1.0.1"
   }
 }
