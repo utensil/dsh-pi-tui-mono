@@ -74,6 +74,24 @@ pi updates flow through automatically (the bundle imports pi as a dependency):
 Escape during a turn routes to `session.agent.abort()` → dsh `agent.cancel()`,
 which clears the inbox and aborts the running phase.
 
+## Slash commands
+
+- Works: `/model` (flash ⇄ pro), `/scoped-models`, `/export` (session → JSONL/HTML
+  file), `/name <name>` (persists a `session/title` event), `/hotkeys`, `/quit`.
+- `--resume <id>` continues a persisted session (the `/resume` UI picker needs
+  pi's file-based session store and is not bridged).
+- Not applicable to dsh (reject with a descriptive message): `/new`, `/import`,
+  `/login`, `/logout`, `/share`, `/clone`, `/trust`, `/settings`, `/tree`,
+  `/fork`, `/session` pickers.
+
+## dsh identity (not pi)
+
+- `PI_OFFLINE=1` suppresses pi's "Update Available / run pi update" popup and
+  pi's model-catalog network fetches.
+- `getQuietStartup`/`getCollapseChangelog` → true hides the "pi vX" banner,
+  startup hints, and the changelog notice. The TUI shell remains pi's (the
+  design premise); the terminal title and hardcoded "pi" strings are inherited.
+
 ## Regression test coverage
 
 | Test | Guards |

@@ -9,6 +9,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { createPiSessionShim } from "../lib/session-shim.js";
 
 /** Build a fake environment that captures emitted pi events + agent calls. */
@@ -17,11 +18,16 @@ function harness() {
   const cancels = [];
   const steers = [];
   const followups = [];
+  const sessionEvents = [];
   const agent = {
     session: {
       header: { cwd: "/work" },
-      events: [],
+      events: sessionEvents,
       model: "deepseek-v4-flash",
+      append: (type, data, _opts) => {
+        sessionEvents.push({ type, data, seq: sessionEvents.length + 1 });
+        return { seq: sessionEvents.length };
+      },
     },
     followup: (msg) => followups.push(msg),
     steer: (msg) => steers.push(msg),
@@ -38,11 +44,13 @@ function harness() {
   const emitted = [];
   shim.subscribe((ev) => emitted.push(ev));
   const dsh = (event) => {
+    // Mirror the real dsh session log: events are recorded on the session.
+    sessionEvents.push({ ...event, seq: sessionEvents.length + 1 });
     const cb = listeners.get("session/event");
     assert.ok(cb, "session/event listener registered");
     cb(agent.session, event);
   };
-  return { shim, agent, emitted, dsh, cancels, steers, followups };
+  return { ctx, shim, agent, emitted, dsh, cancels, steers, followups };
 }
 
 const textChunk = (text) => ({ type: "assistant/chunk", data: { chunk: { type: "text-delta", text } } });
@@ -237,4 +245,43 @@ test("prompt resolves on turn/end", async () => {
   h.dsh({ type: "turn/end", data: { turn: 1, reason: { kind: "completed" } } });
   await p;
   assert.equal(h.followups.length, 1, "user message sent via followup");
+});
+
+test("quiet startup + collapsed changelog suppress pi branding", () => {
+  const h = harness();
+  assert.equal(h.shim.settingsManager.getQuietStartup(), true);
+  assert.equal(h.shim.settingsManager.getCollapseChangelog(), true);
+});
+
+test("exportToJsonl writes the dsh session events to a file", () => {
+  const h = harness();
+  h.dsh({ type: "turn/start", data: { turn: 1 } });
+  h.dsh({ type: "user/message", data: { content: [{ type: "text", text: "hi" }], source: { kind: "user" } } });
+  h.dsh({ type: "assistant/message", data: { message: { content: [{ type: "text", text: "hello" }] } } });
+  h.dsh({ type: "turn/end", data: { turn: 1, reason: { kind: "completed" } } });
+  const file = h.shim.exportToJsonl("/tmp/dsh-pi-test-export.jsonl");
+  const lines = readFileSync(file, "utf8").trim().split("\n");
+  assert.ok(lines.length >= 3, "session events serialized");
+  assert.ok(lines[0].includes("turn/start"));
+  assert.ok(lines[lines.length - 1].includes("turn/end"));
+});
+
+test("setSessionName appends a session/title event and getSessionName returns it", () => {
+  const h = harness();
+  const before = h.agent.session.events.length;
+  h.shim.setSessionName("My Title");
+  const after = h.agent.session.events.length;
+  assert.ok(after > before, "event appended");
+  const last = h.agent.session.events[after - 1];
+  assert.equal(last.type, "session/title");
+  assert.equal(last.data.title, "My Title");
+  assert.equal(h.shim.sessionManager.getSessionName(), "My Title");
+});
+
+test("unsupported session operations reject with descriptive messages", async () => {
+  const { createRuntimeHost } = await import("../lib/session-shim.js");
+  const h = harness();
+  const host = createRuntimeHost(h.ctx, h.agent, "main-session-test");
+  await assert.rejects(host.newSession(), /not supported in dsh-pi/);
+  await assert.rejects(host.importFromJsonl(), /not supported in dsh-pi/);
 });
