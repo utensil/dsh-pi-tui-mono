@@ -73,6 +73,9 @@ exactly pi's style), one block per step (no cross-step flooding).
   door re-launches `dsh --profile tui-pi --resume <id>` in the same terminal
   (`detached` + `unref` so the child survives the parent's exit; verified live:
   the picked session's conversation replayed and the TUI stayed interactive).
+  The handoff is TUI stop -> shell -> child TUI (~15s boot); if the terminal
+  frontend mishandles that transition, set `resumeStrategy: "command"` on the
+  tui row to print the resume command and exit cleanly instead of spawning.
   The current session is not listed until it has persisted storage (dsh's
   agent-loop refuses storage-less resume ids). Regression-tested:
   `switchSession` parses the bridge file id and invokes `onExit`;

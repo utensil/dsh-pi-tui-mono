@@ -72,6 +72,11 @@ export const Config = z.object({
   // Flat dir of pi-format session files the /resume picker lists (generated
   // from dsh's own storage). Defaults to ~/.dsh/sessions-bridge.
   sessionsDir: z.string(),
+  // How /resume hands off to the resumed session: "spawn" re-launches dsh in
+  // the same terminal automatically (TUI stop -> shell -> child TUI);
+  // "command" prints the resume command and exits, letting the user relaunch
+  // cleanly (useful when the terminal frontend mishandles the transition).
+  resumeStrategy: z.string().default("spawn"),
   // TEST ONLY: path to a JSON array of {type, data} dsh session events to
   // replay after boot (no model interaction) — used by the tmux render
   // regression for mermaid/latex/… without touching a model.
@@ -176,6 +181,11 @@ export const apply = async (ctx, config) => {
       // this parent exits (without them it dies with the parent's process
       // group); the 500ms delay lets the child grab the terminal first.
       if (running) mode.stop();
+      if (config?.resumeStrategy === "command") {
+        writeSync(1, `${formatResumeHint(sessionId)}\n`);
+        process.exit(0);
+        return;
+      }
       writeSync(2, `[@dsh-pi/tui] resuming ${sessionId}...\n`);
       const child = spawn("dsh", ["--profile", "tui-pi", "--resume", sessionId], {
         stdio: "inherit",
