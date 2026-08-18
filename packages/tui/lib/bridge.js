@@ -118,11 +118,21 @@ function loadPiThemes(extraDir) {
 /** The selected theme: bundle config (migrated) wins, else pi's settings. */
 function piSelectedTheme(preferred) {
   if (typeof preferred === "string" && preferred) return preferred;
+  return piSettings().theme;
+}
+
+/** Read the local pi installation's settings.json (the agent whose look and
+ * behavior we inherit). Missing file or field -> undefined; never throws. */
+function piSettings() {
   try {
     const s = JSON.parse(readFileSync(join(piAgentDir(), "settings.json"), "utf8"));
-    return typeof s.theme === "string" && s.theme ? s.theme : undefined;
+    return {
+      theme: typeof s.theme === "string" && s.theme ? s.theme : undefined,
+      tuiMode: typeof s.tuiMode === "string" && s.tuiMode ? s.tuiMode : undefined,
+      fullscreenExitOutput: typeof s.fullscreenExitOutput === "string" && s.fullscreenExitOutput ? s.fullscreenExitOutput : undefined,
+    };
   } catch {
-    return undefined;
+    return {};
   }
 }
 
@@ -153,6 +163,8 @@ export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
     provider = "deepseek-official",
     themesDir,
     theme,
+    tuiMode,
+    fullscreenExitOutput,
   } = options;
   const resolvedDefaultModel = defaultModel ?? agent.session?.model ?? agent.options?.model ?? "unknown";
   const available = availableModels.length > 0
@@ -412,6 +424,10 @@ export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
               return true;
             case "getTheme":
               return piSelectedTheme(options?.theme);
+            case "getTuiMode":
+              return options?.tuiMode ?? piSettings().tuiMode ?? "regular";
+            case "getFullscreenExitOutput":
+              return options?.fullscreenExitOutput ?? piSettings().fullscreenExitOutput ?? "transcript";
             case "getImageWidthCells":
               return 40;
             case "getShowHardwareCursor":

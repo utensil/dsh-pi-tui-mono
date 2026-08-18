@@ -137,6 +137,31 @@ layer). `@dsh-pi/extensions` adds:
   Standalone extension files (e.g. herdr-managed `.ts`) are not mountable
   as-is — they need a package wrapper (reported by the migration).
 
+## Migrated pi settings (neutral, via @dsh-pi/migrate + inheritance)
+
+The front door inherits the device pi installation's TUI-affecting settings,
+verified live in the tui-pi profile:
+
+- **Custom theme (railscasts)**: `resourceLoader.getThemes()` includes the
+  custom `~/.pi/agent/themes/*.json` + built-ins; the selected theme (bundle
+  `theme` config or pi's settings) renders with pi's own loader. Live-verified:
+  railscasts palette (`#b294bb` borders, `#666` status).
+- **Fullscreen TUI**: pi's `settings.tuiMode = "fullscreen"` is honored —
+  `settingsManager.getTuiMode()` returns it (bundle config wins, pi settings
+  fall back), so InteractiveMode runs its `TuiAltScreen` fullscreen layout.
+  `fullscreenExitOutput = "resume-hint"` is likewise honored (the transcript
+  dump is skipped). The resume command itself is printed when the dsh session
+  reports persistence — wired with the `/resume` work.
+- **Node preloads (e.g. Lean syntax highlighting)**: a `*-preload.cjs` in the
+  pi agent dir is detected by the migration and reported; dsh requires
+  bootstrap variables like NODE_OPTIONS from the LAUNCHING environment (its
+  `.env` loader rejects them fail-loud), so the migration never writes them.
+  When the ambient env sets `NODE_OPTIONS=--require=<preload>`, the preload
+  loads at node startup AND the front door's `loadNodePreloads()` re-honors
+  `--require` entries at boot (module-cache idempotent, fail-safe). Live
+  verified: a ```` ```lean ```` block renders with the preload's grammar
+  (keyword/entity/number colors from the railscasts palette).
+
 ## dsh identity (not pi)
 
 - `PI_OFFLINE=1` suppresses pi's "Update Available / run pi update" popup and

@@ -52,9 +52,12 @@ if (result.plan.settings.agentLoop) {
   console.log(`model:        ${result.plan.settings.agentLoop.model} (provider ${result.plan.settings.agentLoop.provider})`);
 }
 if (result.plan.settings.theme) console.log(`theme:        ${result.plan.settings.theme}`);
+if (result.plan.settings.tuiMode) console.log(`tui mode:     ${result.plan.settings.tuiMode}`);
+if (result.plan.settings.fullscreenExitOutput) console.log(`tui exit:     ${result.plan.settings.fullscreenExitOutput}`);
 if (result.plan.settings.thinkingLevel) console.log(`thinking:     ${result.plan.settings.thinkingLevel}`);
 console.log(`themes:       ${result.plan.themes.length} custom theme file(s)`);
 console.log(`extensions:   ${result.plan.extensions.npm.length} npm package(s), ${result.plan.extensions.files.length} standalone file(s)`);
+console.log(`preloads:     ${(result.plan.preloads ?? []).map((p) => p.name).join(", ") || "none"}`);
 console.log("");
 for (const w of result.report.written) console.log(`  will write: ${w}`);
 for (const cmd of result.installCommands) console.log(`  run:        ${cmd}`);

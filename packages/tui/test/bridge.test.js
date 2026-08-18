@@ -408,3 +408,39 @@ test("AGENTS.md bootstrap escapes template braces (no interpolate throw)", async
   assert.ok(!bootstrap.text.includes("{{"), "raw {{ escaped");
   assert.ok(bootstrap.text.includes("{ {CONF}"), "escaped braces present");
 });
+
+test("fullscreen TUI settings flow from config (neutral, migratable)", () => {
+  const h = harness();
+  const shim = createPiSessionShim(h.ctx, h.agent, "s", {
+    tuiMode: "fullscreen",
+    fullscreenExitOutput: "resume-hint",
+  });
+  assert.equal(shim.settingsManager.getTuiMode(), "fullscreen");
+  assert.equal(shim.settingsManager.getFullscreenExitOutput(), "resume-hint");
+  // defaults when neither config nor pi settings provide values
+  const plain = createPiSessionShim(h.ctx, h.agent, "s");
+  const mode = plain.settingsManager.getTuiMode();
+  assert.ok(mode === "regular" || mode === "fullscreen", "falls back to pi settings or regular");
+});
+
+test("loadNodePreloads honors --require preloads from NODE_OPTIONS (idempotent, fail-safe)", async () => {
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(join(tmpdir(), "dsh-pi-preload-"));
+  const good = join(dir, "good-preload.cjs");
+  writeFileSync(good, "globalThis.__dshPiPreloadCount = (globalThis.__dshPiPreloadCount ?? 0) + 1;");
+  const bad = join(dir, "bad-preload.cjs");
+  writeFileSync(bad, "throw new Error('boom');");
+  const prev = process.env.NODE_OPTIONS;
+  process.env.NODE_OPTIONS = `--require=${good} --require=${bad}`;
+  try {
+    const { loadNodePreloads } = await import("../lib/index.js");
+    // load twice: node's module cache makes the body run exactly once
+    assert.equal(loadNodePreloads(), 1, "one preload loaded, one failed");
+    loadNodePreloads();
+    assert.equal(globalThis.__dshPiPreloadCount, 1, "preload body ran once (module cache)");
+  } finally {
+    process.env.NODE_OPTIONS = prev;
+  }
+});

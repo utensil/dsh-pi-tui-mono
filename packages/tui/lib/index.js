@@ -1,7 +1,37 @@
 import { InteractiveMode } from "@earendil-works/pi-coding-agent";
 import { SessionId } from "@deepseek-ai/dsh-session";
 import z from "@deepseek-ai/schemastery";
+import { createRequire } from "node:module";
 import { createRuntimeHost } from "./bridge.js";
+
+/** Honor node `--require=<path>` preloads from NODE_OPTIONS at front-door boot.
+ *
+ * dsh merges its layered env (~/.dsh/.env + project .env) into process.env
+ * before plugins apply, but NODE_OPTIONS from an env file cannot retro-apply to
+ * the already-started node process. Loading the referenced preloads here (once;
+ * the module cache makes a second load a no-op when node already ran them at
+ * startup) makes syntax-highlighting preloads and friends effective no matter
+ * where NODE_OPTIONS came from. Fail-safe: a broken preload must never stop the
+ * front door from booting. */
+export function loadNodePreloads() {
+  const nodeOptions = process.env.NODE_OPTIONS ?? "";
+  const requires = [
+    ...nodeOptions.matchAll(/(?:^|\s)--require=("[^"]*"|'[^']*'|\S+)/g),
+    ...nodeOptions.matchAll(/(?:^|\s)--require\s+("[^"]*"|'[^']*'|\S+)/g),
+  ].map((m) => m[1].replace(/^["']|["']$/g, ""));
+  if (requires.length === 0) return 0;
+  const require = createRequire(import.meta.url);
+  let loaded = 0;
+  for (const spec of requires) {
+    try {
+      require(spec);
+      loaded++;
+    } catch (err) {
+      process.stderr.write(`[@dsh-pi/tui] preload ${spec} failed: ${err?.message ?? err}\n`);
+    }
+  }
+  return loaded;
+}
 
 /**
  * @dsh-pi/tui — pi's real InteractiveMode as the dsh front door.
@@ -30,6 +60,9 @@ export const Config = z.object({
   // and a themes dir take precedence over the live ~/.pi/agent home.
   theme: z.string(),
   themesDir: z.string(),
+  // Migrated TUI mode (pi settings tuiMode/fullscreenExitOutput).
+  tuiMode: z.string(),
+  fullscreenExitOutput: z.string(),
 });
 
 export const apply = async (ctx, config) => {
@@ -47,6 +80,9 @@ export const apply = async (ctx, config) => {
   });
 
   const sessionId = SessionId(config?.sessionId ?? "main");
+  // Load NODE_OPTIONS --require preloads (e.g. syntax-highlighting grammars)
+  // before the TUI renders anything.
+  loadNodePreloads();
   // The agent may register asynchronously (resume loads a persisted session
   // through the sessionPersistence service); wait for it instead of failing
   // immediately on the synchronous lookup.
@@ -79,6 +115,8 @@ export const apply = async (ctx, config) => {
     provider: config?.provider,
     theme: config?.theme,
     themesDir: config?.themesDir,
+    tuiMode: config?.tuiMode,
+    fullscreenExitOutput: config?.fullscreenExitOutput,
     extensions: mountedExtensions,
   });
   const mode = new InteractiveMode(runtimeHost, {});

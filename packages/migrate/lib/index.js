@@ -66,10 +66,24 @@ export function readPiHome(piHome) {
       defaultModel: typeof settings.defaultModel === "string" ? settings.defaultModel : undefined,
       defaultThinkingLevel: typeof settings.defaultThinkingLevel === "string" ? settings.defaultThinkingLevel : undefined,
       theme: typeof settings.theme === "string" ? settings.theme : undefined,
+      tuiMode: typeof settings.tuiMode === "string" ? settings.tuiMode : undefined,
+      fullscreenExitOutput: typeof settings.fullscreenExitOutput === "string" ? settings.fullscreenExitOutput : undefined,
     },
     themes,
     extensions: { npm: npmExtensions, files: fileExtensions },
+    preloads: detectPreloads(dir),
   };
+}
+
+/** Node preload files at the pi agent root (CJS by convention, e.g.
+ * lean-highlight-preload.cjs). Generic: any *.cjs file whose name contains
+ * "preload" — the exact grammar/name is the source device's business. */
+export function detectPreloads(piHome) {
+  const dir = piAgentDir(piHome);
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((n) => n.toLowerCase().includes("preload") && /\.[cm]?js$/.test(n))
+    .map((n) => ({ name: n, path: join(dir, n) }));
 }
 
 /**
@@ -91,6 +105,12 @@ export function planMigration(piHome, opts = {}) {
   }
   if (src.settings.theme) {
     plan.settings.theme = src.settings.theme;
+  }
+  if (src.settings.tuiMode) {
+    plan.settings.tuiMode = src.settings.tuiMode;
+  }
+  if (src.settings.fullscreenExitOutput) {
+    plan.settings.fullscreenExitOutput = src.settings.fullscreenExitOutput;
   }
   if (src.settings.defaultThinkingLevel) {
     plan.settings.thinkingLevel = src.settings.defaultThinkingLevel;
@@ -116,6 +136,26 @@ export function planMigration(piHome, opts = {}) {
     );
   }
 
+  // Node preloads (e.g. a syntax-highlighting grammar preload). dsh requires
+  // bootstrap variables like NODE_OPTIONS to come from the LAUNCHING
+  // environment (its .env loader rejects them fail-loud), so this step only
+  // verifies and reports: when the ambient NODE_OPTIONS references the
+  // preloads, dsh inherits them and the @dsh-pi/tui front door also loads
+  // --require preloads at boot; otherwise the operator must export NODE_OPTIONS
+  // (e.g. in the shell profile) before starting dsh.
+  if (src.preloads.length > 0) {
+    plan.preloads = src.preloads.map((p) => ({ name: p.name, path: p.path }));
+    const ambient = process.env.NODE_OPTIONS ?? "";
+    const referenced = plan.preloads.filter((p) => ambient.includes(p.path));
+    plan.notes.push(
+      `preload(s) ${plan.preloads.map((p) => p.name).join(", ")}: ` +
+      (referenced.length > 0
+        ? "referenced by the ambient NODE_OPTIONS — dsh inherits it and @dsh-pi/tui loads them at boot."
+        : "NOT in the ambient NODE_OPTIONS — export NODE_OPTIONS=\"--require=<path>\" in the " +
+          "launching environment (dsh rejects bootstrap variables in .env files)."),
+    );
+  }
+
   return plan;
 }
 
@@ -137,6 +177,8 @@ export function renderProfilePatch(plan, profileDir, piHome) {
   if (plan.settings.thinkingLevel) {
     lines.push(patchEntry("llm-deepseek", `  config:\n    thinking: enabled\n    reasoningEffort: ${plan.settings.thinkingLevel}`));
   }
+  if (plan.settings.tuiMode) tui.push(`    tuiMode: ${plan.settings.tuiMode}`);
+  if (plan.settings.fullscreenExitOutput) tui.push(`    fullscreenExitOutput: ${plan.settings.fullscreenExitOutput}`);
   const themesDir = join(profileDir, "themes");
   if (plan.themes.length > 0 || plan.settings.theme) {
     if (plan.settings.theme) tui.push(`    theme: ${plan.settings.theme}`);
@@ -180,5 +222,9 @@ export function applyMigration({ piHome, profileDir, dryRun = false }) {
     writeFileSync(patchPath, patchContent);
     report.written.push("cordis.patch.yml");
   }
+  // Note: node preloads (plan.preloads) are NEVER written anywhere by this
+  // kit — dsh's .env loader rejects bootstrap variables (NODE_OPTIONS) and
+  // only the launching environment may set them. The plan reports the
+  // requirement; the front door honors ambient NODE_OPTIONS at boot.
   return { plan, report, installCommands: plan.extensions.npm.map((e) => `dsh plugin --profile ${basename(profileDir)} add ${e.name}@${e.version}`) };
 }
