@@ -1,11 +1,14 @@
 # @dsh-pi/tui — pi's real TUI as the dsh front door.
 #
 # Rows registered over @deepseek-ai/dsh-base:
-#   - tui-startup  : parses dsh --profile tui-pi args, exposes ctx.tuiStartup.sessionId
+#   - tui-startup  : parses dsh profile args, exposes ctx.tuiStartup.sessionId
 #   - tui          : mounts pi's InteractiveMode, bridged to the dsh agent-loop.
 #
 # agent-loop is repointed to the TUI's startup-owned session identity, mirroring
-# @dsh-tui/dsh-tui (patch replaces the row's whole config).
+# @dsh-tui/dsh-tui (a patch replaces the row's whole config). The provider and
+# model below are a *neutral default* — deployments repoint them through a later
+# patch layer (the profile's cordis.patch.yml), and the `@dsh-pi/migrate` kit
+# writes that layer from an existing pi installation's settings.
 
 - id: agent-loop
   inject: [tuiStartup]
@@ -16,9 +19,10 @@
         model: deepseek-v4-flash
         cwd: !!js process.cwd()
 
-# Tool guidance: dsh's read tool is UTF-8 only and rejects binary files;
-# images display through read_image (and the TUI renders the returned image
-# block in the tool card).
+# Capability guidance, not identity: dsh's read tool is UTF-8 only and rejects
+# binary files, so image files go through read_image (the TUI renders the
+# returned image block in the tool card). Deployments with a vision-capable
+# route can override this persona in the profile layer.
 - id: system-prompt
   config:
     persona: |
@@ -34,7 +38,7 @@
 
 - insert:
     - id: tui-startup
-      name: 'dsh-pi-tui-shim/startup'
+      name: '@dsh-pi/tui/startup'
 
     # Durable session projections (same storage root the web surface uses).
     - id: storage
@@ -54,7 +58,7 @@
         writeIntervalMs: 5000
 
     - id: tui
-      name: 'dsh-pi-tui-shim'
+      name: '@dsh-pi/tui'
       inject: [tuiStartup]
       config:
         sessionId: !!js ctx.tuiStartup.sessionId

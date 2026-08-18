@@ -1,19 +1,28 @@
-# AGENTS.md — dsh-pi-tui-shim
+# AGENTS.md — dsh-pi-tui-mono
 
-A dsh (DeepSeek Harness) profile bundle that mounts pi's real
-`InteractiveMode` as the terminal front door, bridged to the dsh agent
-runtime. The look ships with `@earendil-works/pi-coding-agent`, so pi TUI
-updates arrive without edits to this repo.
+A pnpm monorepo: use pi's terminal experience inside DeepSeek Harness. The
+front door is pi's **real** `InteractiveMode` (`@dsh-pi/tui`), pi extensions
+run as dsh plugins (`@dsh-pi/extensions`, thin on pi2dsh), and an existing pi
+installation's settings, themes, and extensions migrate into a dsh profile
+(`@dsh-pi/migrate`). The look ships with `@earendil-works/pi-coding-agent`, so
+pi TUI updates arrive without edits to this repo.
 
 ## Repo standards
 
 - **Public-ready open source.** MIT. No private information anywhere: no
   personal paths (`/Users/<user>`), no tokens, keys, hostnames, or identity
-  details. Tests and fixtures must use `t.TempDir()`-style isolated paths.
-  Never commit credentials or personal files.
-- **TypeScript-first source** in `src/`, built to `lib/` (ESM). Keep the
-  dependency surface minimal: `@earendil-works/pi-coding-agent` (TUI/theme)
-  plus dsh packages.
+  details. Tests and fixtures use isolated temp dirs. Never commit credentials
+  or personal files.
+- **Neutral packages.** No package hardcodes a model, a provider, a theme, or
+  an extension list — all of that is configuration, written by
+  `@dsh-pi/migrate` from a pi installation. The only translation allowed is
+  documented (pi provider name → dsh route name).
+- **Boundary.** dsh hosts the agent and the extensions; pi's `InteractiveMode`
+  is only the terminal view. Data flows dsh → shim → TUI, never the other way.
+  pi2dsh owns the pi extension ABI; `@dsh-pi/extensions` only mounts, tracks,
+  and bridges.
+- **JavaScript-first source** in `packages/*/lib/` (ESM). Keep the dependency
+  surface minimal: pi packages plus dsh packages.
 
 ## Commit discipline
 
@@ -25,8 +34,8 @@ updates arrive without edits to this repo.
 - One logical change per commit; stage only files belonging to that change.
 - ALWAYS end the title with `[AGENT]` (e.g.
   `feat: bridge dsh agent events to pi session model [AGENT]`).
-- Verify before committing: `git diff --check`, lint, and the bundle boots
-  (`dsh --profile tui-pi --dump-config`, tmux smoke test).
+- Verify before committing: `git diff --check`, package tests, and the bundle
+  boots (`dsh --profile tui-pi`, tmux smoke test).
 
 ## Verification
 
@@ -35,8 +44,8 @@ updates arrive without edits to this repo.
   through this bundle's front door.
 - TUI verification happens in a real terminal: tmux session + `capture-pane`,
   or herdr's `pane.read` socket API for panes outside tmux.
-- Regression tests: `npm test` (`node --test test/`) drives the bridge with
-  crafted dsh events and asserts the emitted pi events. `docs/parity.md` lists
-  the verified pi-TUI parity features and their test coverage.
-- CI-style checks: schema validation on boot, plugin load without loader
-  errors, clean `--dump-config` composition.
+- Regression tests: `pnpm test` (each package runs `node --test`).
+  `docs/parity.md` lists the verified pi-TUI parity features and their test
+  coverage.
+- Extension mounts are verified end-to-end with a local fixture package
+  (package with a `pi.extensions` entry + a tool), through the real profile.

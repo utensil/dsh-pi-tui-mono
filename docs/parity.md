@@ -3,7 +3,7 @@
 This bundle mounts pi's real `InteractiveMode` (`@earendil-works/pi-coding-agent`)
 over the dsh agent runtime. The features below are **verified working** (live in
 a real terminal, tmux + herdr `pane.read`) and covered by regression tests in
-`test/session-shim.test.js` (`npm test` / `node --test test/`).
+`test/bridge.test.js` (`npm test` / `node --test test/`).
 
 ## Faithful event translation
 
@@ -43,13 +43,17 @@ exactly pi's style), one block per step (no cross-step flooding).
 - Duration is real (`Took 1.0s` for a `sleep 1`), driven by the
   `tool_execution_start` → `tool_execution_end` gap.
 
-## Model switching
+## Model switching (neutral configuration)
 
-- Default model: `deepseek-v4-flash` (agent config + shim defaults).
-- `/model` (pi's dialog) switches flash ⇄ pro. The switch drives
-  `installModelSelection(agent.ctx, target)` with provider
-  **`deepseek-official`** (the dsh provider id — using `deepseek` breaks every
-  request), updates the footer state, and applies to future steps.
+- Default model comes from the bundle `Config` (`defaultModel`), written by
+  `@dsh-pi/migrate` from a pi installation; without it the bridge falls back to
+  the dsh agent's own configured model (`agent.options.model`). Nothing is
+  hardcoded in the bridge.
+- `/model` (pi's dialog) switches across `availableModels` (also config, from
+  migration). The switch drives `installModelSelection(agent.ctx, target)` with
+  the configured provider (default `deepseek-official`, the dsh provider id —
+  using `deepseek` breaks every request), updates the footer state, and applies
+  to future steps.
 
 ## Session persistence + resume
 
@@ -98,18 +102,40 @@ faithfully (unit-tested).
 
 ## pi inheritance (same device)
 
-The bundle inherits the local pi's configuration as a bootstrap (read at
+`@dsh-pi/tui` inherits the local pi's configuration as a bootstrap (read at
 session start, not tracked):
 
 - **Theme**: `resourceLoader.getThemes()` returns pi's full `Theme` objects —
   the custom themes from `~/.pi/agent/themes/*.json` (e.g. railscasts) plus the
   built-in dark/light — loaded through pi's own `loadThemeFromPath`, and
-  `getTheme()` returns pi's selected theme from `~/.pi/agent/settings.json`.
+  `getTheme()` returns the bundle-configured theme (migrated) or pi's selected
+  theme from `~/.pi/agent/settings.json`. A migrated `themesDir` (written by
+  `@dsh-pi/migrate`) takes precedence.
 - **AGENTS.md**: the project's `AGENTS.md`/`CLAUDE.md` (and `~/.pi/agent/`'s)
   are injected into the dsh system prompt via a `system-prompt/assemble` hook,
   so the agent follows the same instructions as pi. Template braces (`{{…}}`)
   are escaped to `{ {…}` because dsh's prompt interpolate throws on unknown or
   malformed references (e.g. `{{justfile_directory()}}`).
+
+## Pi extensions as dsh plugins (@dsh-pi/extensions, thin on pi2dsh)
+
+pi extension packages mount as dsh plugins through
+[pi2dsh](https://github.com/weijiafu14/pi2dsh) (the upstream Pi-Host ABI
+layer). `@dsh-pi/extensions` adds:
+
+- **Local mounts**: absolute package dirs via `localExtensions` (verified
+  end-to-end: a local fixture package's tool was called by the dsh agent and
+  its result rendered in the TUI through the normal tool-card path).
+- **Registry**: `ctx.piExtensions.list()` — what this layer mounted; the TUI
+  surfaces mounted extensions in pi's extension list.
+- **Surfaces seam**: `pi-extensions/*` events for TUI-bound extension UI
+  (pi2dsh renders components headlessly to text; live widgets are a
+  documented follow-up).
+- **Migration**: `@dsh-pi/migrate` reads the installed pi extension packages
+  and emits the `dsh plugin add <pkg>` commands to install them into the
+  profile (pi2dsh resolves packages from the profile's node_modules).
+  Standalone extension files (e.g. herdr-managed `.ts`) are not mountable
+  as-is — they need a package wrapper (reported by the migration).
 
 ## dsh identity (not pi)
 
@@ -119,7 +145,10 @@ session start, not tracked):
   startup hints, and the changelog notice. The TUI shell remains pi's (the
   design premise); the terminal title and hardcoded "pi" strings are inherited.
 
-## Regression test coverage
+This monorepo's packages each run `node --test` (`pnpm test` at the root).
+Coverage per package:
+
+### packages/tui (test/bridge.test.js)
 
 | Test | Guards |
 |---|---|
@@ -132,3 +161,24 @@ session start, not tracked):
 | model switch | footer state + closure model updated (regression: shadowing bug) |
 | escape interrupt | `session.agent.abort()` → `agent.cancel("interrupted")` |
 | prompt resolves | `prompt()` promise settles on `turn/end` |
+| theme inheritance | migrated `themesDir` + bundle `theme` override the live pi home |
+| neutral model fallback | `agent.options.model` used when no config supplied |
+
+### packages/extensions (test/extensions.test.js)
+
+| Test | Guards |
+|---|---|
+| empty config | registry exposed, ready event emitted |
+| unresolvable package | reported `failed` with error, mount event emitted |
+| surfaces off | mount events suppressed, registry intact |
+| localExtensions | mounted through the same path as packages |
+
+### packages/migrate (test/migrate.test.js)
+
+| Test | Guards |
+|---|---|
+| readPiHome | settings, themes, npm + file extensions read neutrally |
+| planMigration | pi provider → dsh route, notes for install + standalone files |
+| renderProfilePatch | id-targeted rows, no hardcoded values, no stale shim wording |
+| applyMigration | dry-run writes nothing; apply writes themes + patch; install commands |
+| missing profile | refuses with an explicit error |

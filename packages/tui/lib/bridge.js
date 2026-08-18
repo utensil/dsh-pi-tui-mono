@@ -1,5 +1,5 @@
 /**
- * dsh-pi-tui-shim — a pi `AgentSession`-shaped shim over a dsh agent.
+ * @dsh-pi/tui bridge — a pi `AgentSession`-shaped bridge over a dsh agent.
  *
  * Translates the dsh agent event stream (cordis `session/event`) into the pi
  * session events that `InteractiveMode` renders (message_start / message_update
@@ -8,6 +8,11 @@
  *
  * The shapes follow `@earendil-works/pi-ai` (AssistantMessage / content blocks)
  * and `@earendil-works/pi-coding-agent` InteractiveMode's handleEvent contract.
+ *
+ * Model surfaces are deliberately neutral: the default model, the /model
+ * picklist, and the provider come from the bundle `Config` (or fall back to the
+ * dsh agent's own current model), never hardcoded here. `@dsh-pi/migrate`
+ * writes that config from an existing pi installation's settings.
  */
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
 import { installModelSelection } from "@deepseek-ai/dsh-agent";
@@ -23,19 +28,6 @@ import { createRequire } from "node:module";
 const textBlocks = (content) =>
   (content ?? []).filter((b) => b.type === "text").map((b) => b.text).join("\n\n");
 
-const DEFAULT_MODEL = "deepseek-v4-flash";
-const DEFAULT_MODEL_OBJECT = {
-  id: DEFAULT_MODEL,
-  provider: "deepseek",
-  name: "DeepSeek V4 Flash",
-};
-
-/** Models the /model command may select. */
-const AVAILABLE_MODELS = [
-  DEFAULT_MODEL_OBJECT,
-  { id: "deepseek-v4-pro", provider: "deepseek", name: "DeepSeek V4 Pro" },
-];
-
 /** Build a pi-shaped AssistantMessage with the given content blocks. */
 function assistantMessage(model, content, over = {}) {
   return {
@@ -43,7 +35,7 @@ function assistantMessage(model, content, over = {}) {
     content,
     api: "openai",
     provider: "openai",
-    model: typeof model === "string" ? model : (model?.id ?? DEFAULT_MODEL),
+    model: typeof model === "string" ? model : (model?.id ?? "unknown"),
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     stopReason: "stop",
     timestamp: Date.now(),
@@ -89,9 +81,10 @@ const piThemeDir = (() => {
   }
 })();
 
-/** Scan pi's custom + built-in themes into full Theme objects (via pi's own
- * loader, so the TUI's theme.fg/etc. work). */
-function loadPiThemes() {
+/** Scan migrated + pi's custom + built-in themes into full Theme objects (via
+ * pi's own loader, so the TUI's theme.fg/etc. work). A migrated themes dir
+ * (written by @dsh-pi/migrate) takes precedence over the live pi home. */
+function loadPiThemes(extraDir) {
   const themes = [];
   let loadThemeFromPath = null;
   try {
@@ -108,10 +101,11 @@ function loadPiThemes() {
       themes.push({ name: fallbackName, sourcePath });
     }
   };
-  const customDir = join(piAgentDir(), "themes");
-  if (existsSync(customDir)) {
-    for (const f of readdirSync(customDir).filter((n) => n.endsWith(".json"))) {
-      add(join(customDir, f), basename(f, ".json"));
+  for (const dir of [extraDir, join(piAgentDir(), "themes")]) {
+    if (dir && existsSync(dir)) {
+      for (const f of readdirSync(dir).filter((n) => n.endsWith(".json"))) {
+        add(join(dir, f), basename(f, ".json"));
+      }
     }
   }
   for (const n of ["dark", "light"]) {
@@ -121,8 +115,9 @@ function loadPiThemes() {
   return themes;
 }
 
-/** pi's selected theme from ~/.pi/agent/settings.json. */
-function piSelectedTheme() {
+/** The selected theme: bundle config (migrated) wins, else pi's settings. */
+function piSelectedTheme(preferred) {
+  if (typeof preferred === "string" && preferred) return preferred;
   try {
     const s = JSON.parse(readFileSync(join(piAgentDir(), "settings.json"), "utf8"));
     return typeof s.theme === "string" && s.theme ? s.theme : undefined;
@@ -146,17 +141,32 @@ function loadPiContextFiles(cwd) {
   return parts.join("\n\n");
 }
 
-export function createPiSessionShim(ctx, agent, sessionId) {
+export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
   const dshSession = agent.session;
+  // Model surfaces are neutral: the bundle config (written by @dsh-pi/migrate)
+  // supplies the default model, the /model picklist, and the provider; without
+  // it we fall back to the dsh agent's own current model so nothing is
+  // hardcoded here.
+  const {
+    defaultModel,
+    availableModels = [],
+    provider = "deepseek-official",
+    themesDir,
+    theme,
+  } = options;
+  const resolvedDefaultModel = defaultModel ?? agent.session?.model ?? agent.options?.model ?? "unknown";
+  const available = availableModels.length > 0
+    ? availableModels.map((m) => (typeof m === "string" ? { id: m, provider, name: m } : m))
+    : [{ id: resolvedDefaultModel, provider, name: resolvedDefaultModel }];
   // Per-request model override for the dsh agent (mirrors @dsh-tui's
   // /model wiring): mutating target.current changes future steps only.
-  const target = { current: { provider: "deepseek-official", model: DEFAULT_MODEL } };
+  const target = { current: { provider, model: resolvedDefaultModel } };
   const disposeModelSelection = installModelSelection(agent.ctx, target);
   const cwd = dshSession?.header?.cwd ?? process.cwd();
   const listeners = new Set();
   const pendingPrompts = [];
   const toolCalls = new Map(); // callId -> { name, arguments }
-  let model = agent.session?.model ?? DEFAULT_MODEL;
+  let model = resolvedDefaultModel;
 
   // Bootstrap: inherit pi's AGENTS.md/CLAUDE.md (global + project) into the
   // dsh system prompt so the agent follows the same instructions as pi.
@@ -187,7 +197,7 @@ export function createPiSessionShim(ctx, agent, sessionId) {
     messages: [],
     streaming: false,
     compacting: false,
-    model: { ...DEFAULT_MODEL_OBJECT },
+    model: { ...available[0] },
     thinkingLevel: "high",
   };
 
@@ -401,7 +411,7 @@ export function createPiSessionShim(ctx, agent, sessionId) {
             case "getCollapseChangelog":
               return true;
             case "getTheme":
-              return piSelectedTheme();
+              return piSelectedTheme(options?.theme);
             case "getImageWidthCells":
               return 40;
             case "getShowHardwareCursor":
@@ -432,7 +442,7 @@ export function createPiSessionShim(ctx, agent, sessionId) {
     sessionId,
     cwd,
     get model() {
-      return { id: model, provider: "deepseek", name: model };
+      return { id: model, provider, name: model };
     },
     set model(value) {
       if (typeof value === "string") model = value;
@@ -442,12 +452,13 @@ export function createPiSessionShim(ctx, agent, sessionId) {
     settingsManager: noopService,
     modelRuntime: {
       isUsingSubscription: () => false,
-      getAvailableSnapshot: () => [],
+      isUsingOAuth: () => false,
+      getAvailableSnapshot: () => [...available],
       getModel: () => undefined,
       getError: () => undefined,
       getAuth: () => undefined,
       checkAuth: () => undefined,
-      refresh: async () => undefined,
+      refresh: async (opts) => ({ aborted: opts?.signal?.aborted === true, errors: new Map() }),
       getModels: () => [],
     },
     sessionManager: new Proxy(
@@ -475,7 +486,7 @@ export function createPiSessionShim(ctx, agent, sessionId) {
     ),
     scopedModels: [],
     modelRegistry: {
-      getAvailable: () => [...AVAILABLE_MODELS],
+      getAvailable: () => [...available],
       getAll: () => [],
       getApiKeyForProvider: () => undefined,
       getError: () => undefined,
@@ -487,10 +498,10 @@ export function createPiSessionShim(ctx, agent, sessionId) {
       authStorage: undefined,
     },
     resourceLoader: {
-      getThemes: () => ({ themes: loadPiThemes(), diagnostics: [], errors: [] }),
-      loadTheme: (name) => loadPiThemes().find((t) => t.name === name)?.sourcePath,
+      getThemes: () => ({ themes: loadPiThemes(options?.themesDir), diagnostics: [], errors: [] }),
+      loadTheme: (name) => loadPiThemes(options?.themesDir).find((t) => t.name === name)?.sourcePath,
       getSkills: () => ({ skills: [], diagnostics: [], errors: [] }),
-      getExtensions: () => ({ extensions: [], diagnostics: [], errors: [] }),
+      getExtensions: () => ({ extensions: options?.extensions ?? [], diagnostics: [], errors: [] }),
       getPrompts: () => ({ prompts: [], diagnostics: [], errors: [] }),
       getAgentsFiles: () => ({ agentsFiles: [], diagnostics: [], errors: [] }),
       getSystemPromptSource: () => undefined,
@@ -576,16 +587,15 @@ export function createPiSessionShim(ctx, agent, sessionId) {
       }
     },
     setModel(nextModel) {
-      const provider = "deepseek-official";
-      const id = typeof nextModel?.id === "string" ? nextModel.id : nextModel?.model ?? DEFAULT_MODEL;
+      const id = typeof nextModel?.id === "string" ? nextModel.id : nextModel?.model ?? resolvedDefaultModel;
       target.current = { provider, model: id };
       model = id;
       stateRef.model = { id, provider, name: id };
       return Promise.resolve();
     },
     cycleModel() {
-      const next = AVAILABLE_MODELS[(AVAILABLE_MODELS.findIndex((m) => m.id === model) + 1) % AVAILABLE_MODELS.length];
-      target.current = { provider: "deepseek-official", model: next.id };
+      const next = available[(available.findIndex((m) => m.id === model) + 1) % available.length];
+      target.current = { provider, model: next.id };
       model = next.id;
       stateRef.model = { id: next.id, provider: next.provider, name: next.name };
       return Promise.resolve();
@@ -642,7 +652,7 @@ export function createPiSessionShim(ctx, agent, sessionId) {
       return [];
     },
     agent: {
-      model: DEFAULT_MODEL,
+      model: resolvedDefaultModel,
       reasoningEffort: "high",
       // Escape-interrupt calls session.agent.abort(); route it to the dsh
       // agent's cancel (clears the inbox and aborts the running phase).
@@ -683,8 +693,8 @@ export function createPiSessionShim(ctx, agent, sessionId) {
  * resolve to safe no-op defaults so pi UI features we do not bridge yet do not
  * crash the boot.
  */
-export function createRuntimeHost(ctx, agent, sessionId) {
-  const session = createPiSessionShim(ctx, agent, sessionId);
+export function createRuntimeHost(ctx, agent, sessionId, modelOptions = {}) {
+  const session = createPiSessionShim(ctx, agent, sessionId, modelOptions);
   const cwd = session.cwd;
 
   const noopService = new Proxy(

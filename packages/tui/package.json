@@ -1,0 +1,31 @@
+{
+  "name": "@dsh-pi/tui",
+  "version": "0.2.0",
+  "description": "pi's real InteractiveMode as the DeepSeek Harness front door \u2014 the dsh agent runtime rendered by pi's actual TUI (update-proof: the look ships with pi).",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./startup": {
+      "default": "./lib/startup.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@deepseek-ai/cordis": "latest",
+    "@deepseek-ai/schemastery": "latest",
+    "@earendil-works/pi-coding-agent": "^0.80.3"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}

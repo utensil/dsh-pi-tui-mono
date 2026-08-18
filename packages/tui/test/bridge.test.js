@@ -10,7 +10,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
-import { createPiSessionShim } from "../lib/session-shim.js";
+import { createPiSessionShim } from "../lib/bridge.js";
 
 /** Build a fake environment that captures emitted pi events + agent calls. */
 function harness() {
@@ -288,7 +288,7 @@ test("setSessionName appends a session/title event and getSessionName returns it
 });
 
 test("unsupported session operations reject with descriptive messages", async () => {
-  const { createRuntimeHost } = await import("../lib/session-shim.js");
+  const { createRuntimeHost } = await import("../lib/bridge.js");
   const h = harness();
   const host = createRuntimeHost(h.ctx, h.agent, "main-session-test");
   await assert.rejects(host.newSession(), /not supported in dsh-pi/);
@@ -346,6 +346,19 @@ test("inherits pi themes (custom + built-in) and the selected theme", () => {
   // selected theme from pi settings (or undefined fallback)
   const sel = h.shim.settingsManager.getTheme();
   assert.ok(sel === undefined || typeof sel === "string");
+});
+
+test("migrated themesDir + bundle theme override the live pi home (neutral config)", async () => {
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(join(tmpdir(), "dsh-pi-themes-"));
+  writeFileSync(join(dir, "migrated.json"), JSON.stringify({ name: "migrated", fg: "#abc" }));
+  const h = harness();
+  const shim = createPiSessionShim(h.ctx, h.agent, "s", { themesDir: dir, theme: "migrated" });
+  const themes = shim.resourceLoader.getThemes().themes;
+  assert.ok(themes.some((t) => t.name === "migrated"), "migrated theme present");
+  assert.equal(shim.settingsManager.getTheme(), "migrated", "bundle theme wins");
 });
 
 test("bootstraps pi AGENTS.md into the dsh system prompt", async () => {
