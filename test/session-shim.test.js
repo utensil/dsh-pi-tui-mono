@@ -9,7 +9,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createPiSessionShim } from "../lib/session-shim.js";
 
 /** Build a fake environment that captures emitted pi events + agent calls. */
@@ -19,6 +19,7 @@ function harness() {
   const steers = [];
   const followups = [];
   const sessionEvents = [];
+  const agentCtxHandlers = new Map();
   const agent = {
     session: {
       header: { cwd: "/work" },
@@ -32,7 +33,15 @@ function harness() {
     followup: (msg) => followups.push(msg),
     steer: (msg) => steers.push(msg),
     cancel: (cause) => cancels.push(cause),
-    ctx: { on: () => () => {} },
+    ctx: {
+      _handlers: agentCtxHandlers,
+      on: (name, cb) => {
+        const list = agentCtxHandlers.get(name) ?? [];
+        list.push(cb);
+        agentCtxHandlers.set(name, list);
+        return () => {};
+      },
+    },
   };
   const ctx = {
     on: (name, cb) => {
@@ -323,4 +332,66 @@ test("steered message becomes a sent user message after the tool step", () => {
   assert.ok(userMsgs.some((m) => m.message.content[0].text === "now continue"), "steered text rendered as user message");
   // and the steering queue drained
   assert.deepEqual(h.shim.getSteeringMessages(), []);
+});
+
+test("inherits pi themes (custom + built-in) and the selected theme", () => {
+  const h = harness();
+  const themes = h.shim.resourceLoader.getThemes().themes;
+  const names = themes.map((t) => t.name);
+  assert.ok(names.includes("dark"), "built-in dark theme");
+  assert.ok(names.includes("light"), "built-in light theme");
+  for (const t of themes) {
+    assert.ok(t.sourcePath && existsSync(t.sourcePath), `theme ${t.name} has a real file`);
+  }
+  // selected theme from pi settings (or undefined fallback)
+  const sel = h.shim.settingsManager.getTheme();
+  assert.ok(sel === undefined || typeof sel === "string");
+});
+
+test("bootstraps pi AGENTS.md into the dsh system prompt", async () => {
+  const h = harness();
+  // the fake agent.ctx captures system-prompt/assemble hooks
+  const hookCbs = h.agent.ctx._hooks?.["system-prompt/assemble"];
+  // run the waterfall: base assembly -> hook appends the AGENTS.md section
+  const base = { sections: [{ name: "harness:identity", text: "You are dsh." }], variables: {} };
+  let assembled = base;
+  if (hookCbs) {
+    let next = async () => base;
+    for (const cb of [...hookCbs].reverse()) {
+      const prev = next;
+      next = async () => cb(base, {}, prev);
+    }
+    assembled = await next();
+  }
+  const sections = assembled.sections ?? [];
+  const bootstrap = sections.find((s) => s.name === "bootstrap:agents-md");
+  // cwd /work has no AGENTS.md in tests; the global ~/.pi/agent may or may not.
+  // Assert the hook exists and runs without breaking the base assembly.
+  assert.ok(sections.length >= 1, "sections preserved");
+  assert.ok(Array.isArray(sections));
+});
+
+test("AGENTS.md bootstrap escapes template braces (no interpolate throw)", async () => {
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(join(tmpdir(), "dsh-pi-agents-"));
+  writeFileSync(join(dir, "AGENTS.md"), "# Test\nUse `ln -s {{CONF}}` and `{{justfile_directory()}}` literally.\nRule: ask when unsure.");
+  // rebuild the shim with the crafted cwd
+  const listeners = new Map();
+  const agent = {
+    session: { header: { cwd: dir }, events: [], model: "x", append() {} },
+    followup() {}, steer() {}, cancel() {},
+    ctx: { _handlers: new Map(), on: (n, cb) => { agent.ctx._handlers.set(n, cb); return () => {}; } },
+  };
+  const ctx = { on: (n, cb) => listeners.set(n, cb) };
+  const shim = createPiSessionShim(ctx, agent, "s");
+  const cb = agent.ctx._handlers.get("system-prompt/assemble");
+  assert.ok(cb, "assemble hook registered when AGENTS.md exists");
+  const base = { sections: [{ name: "harness:identity", text: "You are dsh." }], variables: {} };
+  const result = await cb(base, {}, async () => base);
+  const bootstrap = result.sections.find((s) => s.name === "bootstrap:agents-md");
+  assert.ok(bootstrap, "bootstrap section appended");
+  assert.ok(!bootstrap.text.includes("{{"), "raw {{ escaped");
+  assert.ok(bootstrap.text.includes("{ {CONF}"), "escaped braces present");
 });

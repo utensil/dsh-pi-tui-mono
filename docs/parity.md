@@ -96,6 +96,21 @@ system-prompt guidance so agents use `read_image` for image paths instead of
 hitting `read`'s binary rejection. The bridge itself renders image blocks
 faithfully (unit-tested).
 
+## pi inheritance (same device)
+
+The bundle inherits the local pi's configuration as a bootstrap (read at
+session start, not tracked):
+
+- **Theme**: `resourceLoader.getThemes()` returns pi's full `Theme` objects —
+  the custom themes from `~/.pi/agent/themes/*.json` (e.g. railscasts) plus the
+  built-in dark/light — loaded through pi's own `loadThemeFromPath`, and
+  `getTheme()` returns pi's selected theme from `~/.pi/agent/settings.json`.
+- **AGENTS.md**: the project's `AGENTS.md`/`CLAUDE.md` (and `~/.pi/agent/`'s)
+  are injected into the dsh system prompt via a `system-prompt/assemble` hook,
+  so the agent follows the same instructions as pi. Template braces (`{{…}}`)
+  are escaped to `{ {…}` because dsh's prompt interpolate throws on unknown or
+  malformed references (e.g. `{{justfile_directory()}}`).
+
 ## dsh identity (not pi)
 
 - `PI_OFFLINE=1` suppresses pi's "Update Available / run pi update" popup and
