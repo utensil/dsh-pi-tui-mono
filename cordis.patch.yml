@@ -13,7 +13,7 @@
     agents:
       - id: main
         provider: deepseek-official
-        model: deepseek-v4-pro
+        model: deepseek-v4-flash
         cwd: !!js process.cwd()
 
 # Full thinking at max effort (mirrors @dsh-tui/dsh-tui). Key and endpoint

@@ -9,7 +9,7 @@ repo="${1:-$HOME/projects/dsh-pi-tui-shim}"
 profile="$HOME/.dsh/profiles/tui-pi"
 
 mkdir -p "$repo/node_modules/@deepseek-ai" "$repo/node_modules/@earendil-works"
-for p in cordis schemastery dsh-session dsh-llm dsh-agent-loop dsh-cmdline; do
+for p in cordis schemastery dsh-session dsh-llm dsh-agent-loop dsh-agent dsh-cmdline; do
   ln -sfn "$HOME/.bun/install/global/node_modules/@deepseek-ai/$p" "$repo/node_modules/@deepseek-ai/$p"
 done
 ln -sfn "$HOME/.bun/install/global/node_modules/@earendil-works/pi-coding-agent" "$repo/node_modules/@earendil-works/pi-coding-agent"
