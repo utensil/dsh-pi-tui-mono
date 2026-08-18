@@ -925,7 +925,7 @@ export function createRuntimeHost(ctx, agent, sessionId, modelOptions = {}) {
   const makeSession = () => createPiSessionShim(ctx, currentAgent, currentId, modelOptions);
   let session = makeSession();
   const cwd = session.cwd;
-  const { consoleBuffer } = modelOptions;
+  const { consoleBuffer, hintSink } = modelOptions;
   let rebindSession = null;
   const noopService = new Proxy(
     {},
@@ -1018,7 +1018,7 @@ export function createRuntimeHost(ctx, agent, sessionId, modelOptions = {}) {
       }
       // The ACTIVE session (currentId) — after an in-process /resume switch
       // the original sessionId is stale and pointing at it would be empty.
-      writeSync(1, `${formatResumeHint(currentId)}\n`);
+      (hintSink ?? ((line) => writeSync(1, `${line}\n`)))(formatResumeHint(currentId));
     },
   };
 }

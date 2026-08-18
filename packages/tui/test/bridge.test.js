@@ -690,3 +690,34 @@ test("bridge files carry real messages so the /resume picker shows turn counts (
   // pi's buildSessionInfo counts these for the picker's turn count / activity time
   assert.equal(lines.filter((l) => l.includes('"type":"message"')).length, 2);
 });
+
+test("the quit hint after an in-process switch targets the ACTIVE session, not the stale boot one", async () => {
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(join(tmpdir(), "dsh-pi-hint-"));
+  const sessionsDir = join(dir, "sessions");
+  const projcache = join(dir, "projcache.json");
+  const resumedId = "main-session-abc-123e4567-e89b-12d3-a456-426614174000";
+  writeFileSync(projcache, JSON.stringify({ tables: { sessions: { [resumedId]: { identity: { cwd: "/work" }, rows: {} } } } }));
+  const h = harness();
+  const { createRuntimeHost, formatResumeHint } = await import("../lib/bridge.js");
+  const hints = [];
+  const rt = createRuntimeHost(h.ctx, h.agent, "s", {
+    sessionsDir, projcachePath: projcache, hintSink: (line) => hints.push(line),
+  });
+  const resumedAgent = {
+    session: { header: { cwd: "/work" }, events: [], model: "x", append() {} },
+    followup() {}, steer() {}, cancel() {}, ctx: { on: () => () => {} }, options: {},
+  };
+  h.ctx.agents = { resume: async () => resumedAgent };
+  const file = join(sessionsDir, `${resumedId}.jsonl`);
+  await rt.switchSession(file);
+  rt.dispose();
+  assert.equal(hints.length, 1, "hint written on the final dispose");
+  assert.ok(
+    hints[0].includes(`--resume ${resumedId}`),
+    `hint targets the resumed session (got: ${hints[0]}) — regression: it used the stale boot session id`,
+  );
+  assert.equal(formatResumeHint(resumedId), `To resume this session: dsh --profile tui-pi --resume ${resumedId}`);
+});
