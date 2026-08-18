@@ -32,6 +32,14 @@ pi TUI updates arrive without edits to this repo.
 - Conventional commits: `feat:`, `fix:`, `refactor:`, `docs:`, `chore:`.
   Short title explaining the *why* + a description of *what* changed.
 - One logical change per commit; stage only files belonging to that change.
+- **Target every git command explicitly**: before running a git operation,
+  verify or ensure in the command's arguments that it targets the INTENDED
+  remote (e.g. `origin`), branch (e.g. `main` / the current feature branch),
+  and worktree or directory (e.g. run from the repo root or pass the intended
+  `-C`/path). Do not rely on defaults, `HEAD`-relative ambiguity, or ambient
+  state for destructive or push/publish operations; read `git status`,
+  `git branch --show-current`, and `git remote -v` first when unsure. (The
+  intended file/path set is already covered by the staging rule above.)
 - ALWAYS end the title with `[AGENT]` (e.g.
   `feat: bridge dsh agent events to pi session model [AGENT]`).
 - Verify before committing: `git diff --check`, package tests, and the bundle
