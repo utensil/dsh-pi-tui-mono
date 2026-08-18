@@ -721,3 +721,54 @@ test("the quit hint after an in-process switch targets the ACTIVE session, not t
   );
   assert.equal(formatResumeHint(resumedId), `To resume this session: dsh --profile tui-pi --resume ${resumedId}`);
 });
+
+test("bridge files prune when a session leaves the cache; the uncached current session is not written", async () => {
+  const { mkdtempSync, writeFileSync, mkdirSync, readFileSync, readdirSync, rmSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(join(tmpdir(), "dsh-pi-prune-"));
+  const sessionsDir = join(dir, "sessions");
+  const projcache = join(dir, "projcache.json");
+  const cachedId = "main-session-11111111-2222-3333-4444-555555555555";
+  const goneId = "main-session-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+  writeFileSync(projcache, JSON.stringify({ tables: { sessions: {
+    [cachedId]: { identity: { cwd: "/work" }, rows: {} },
+    [goneId]: { identity: { cwd: "/work" }, rows: {} },
+  } } }));
+  const h = harness();
+  createPiSessionShim(h.ctx, h.agent, "s", { sessionsDir, projcachePath: projcache });
+  assert.ok(readdirSync(sessionsDir).includes(`${cachedId}.jsonl`), "cached session file written");
+  assert.ok(readdirSync(sessionsDir).includes(`${goneId}.jsonl`), "second session file written");
+  // the CURRENT session (uncached) is NOT written
+  assert.ok(!readdirSync(sessionsDir).includes("s.jsonl"), "uncached current session not written");
+  // the gone session leaves the cache -> its file is pruned on regeneration
+  writeFileSync(projcache, JSON.stringify({ tables: { sessions: { [cachedId]: { identity: { cwd: "/work" }, rows: {} } } } }));
+  createPiSessionShim(h.ctx, h.agent, "s", { sessionsDir, projcachePath: projcache });
+  assert.ok(!readdirSync(sessionsDir).includes(`${goneId}.jsonl`), "file pruned when the session leaves the cache");
+  assert.ok(readdirSync(sessionsDir).includes(`${cachedId}.jsonl`), "remaining session kept");
+});
+
+test("switchSession propagates a failed in-process resume (the TUI shows 'Failed to resume session')", async () => {
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(join(tmpdir(), "dsh-pi-fail-"));
+  const sessionsDir = join(dir, "sessions");
+  const projcache = join(dir, "projcache.json");
+  const id = "main-session-99999999-8888-7777-6666-555555555555";
+  writeFileSync(projcache, JSON.stringify({ tables: { sessions: { [id]: { identity: { cwd: "/work" }, rows: {} } } } }));
+  const h = harness();
+  const { createRuntimeHost } = await import("../lib/bridge.js");
+  h.ctx.agents = { resume: async () => { throw new Error("persistence refused the corrupt log"); } };
+  const rt = createRuntimeHost(h.ctx, h.agent, "s", { sessionsDir, projcachePath: projcache });
+  await assert.rejects(
+    rt.switchSession(join(sessionsDir, `${id}.jsonl`)),
+    /persistence refused/,
+    "a failed ctx.agents.resume rejects switchSession (pi shows 'Failed to resume session')",
+  );
+});
+
+test("getFollowUpMessages is a benign empty list", () => {
+  const h = harness();
+  assert.deepEqual(h.shim.getFollowUpMessages(), []);
+});
