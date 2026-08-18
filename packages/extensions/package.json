@@ -32,12 +32,12 @@
     "pi-boomerang": "0.7.0",
     "pi-subagents": "0.50.0",
     "pi-dynamic-workflows": "1.0.1",
-    "@deepseek-ai/dsh-agent": "latest",
-    "@deepseek-ai/dsh-commands": "latest",
-    "@deepseek-ai/dsh-llm": "latest",
-    "@deepseek-ai/dsh-session": "latest",
-    "@deepseek-ai/dsh-skill-filesystem": "latest",
-    "@deepseek-ai/dsh-system-prompt": "latest",
-    "@deepseek-ai/dsh-tools": "latest"
+    "@deepseek-ai/dsh-agent": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-commands": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-llm": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-session": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-skill-filesystem": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-system-prompt": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-tools": "0.1.0-rc.6"
   }
 }
