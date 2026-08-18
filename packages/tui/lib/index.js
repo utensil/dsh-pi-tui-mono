@@ -116,6 +116,13 @@ export const apply = async (ctx, config) => {
 
   const consoleBuffer = installConsoleBuffer();
 
+  // pi-tui's default escape timeout is 10ms, which makes split-arriving
+  // escape sequences (mouse events under load) flush the bare ESC before the
+  // rest arrives; the remainder then lands in the input box as text. A saner
+  // window (unless the operator already tuned it) assembles them correctly.
+  if (process.env.PI_TUI_ESC_TIMEOUT === undefined) {
+    process.env.PI_TUI_ESC_TIMEOUT = "150";
+  }
   const sessionId = SessionId(config?.sessionId ?? "main");
   // Load NODE_OPTIONS --require preloads (e.g. syntax-highlighting grammars)
   // before the TUI renders anything.

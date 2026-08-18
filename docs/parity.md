@@ -221,6 +221,16 @@ local tool execution.
 - `getQuietStartup`/`getCollapseChangelog` → true hides the "pi vX" banner,
   startup hints, and the changelog notice. The TUI shell remains pi's (the
   design premise); the terminal title and hardcoded "pi" strings are inherited.
+- **Escape-sequence assembly**: pi-tui's default escape timeout is a razor-thin
+  10ms, so a split-arriving CSI sequence (e.g. a mouse event under load) flushes
+  the bare ESC before the rest arrives — and a lone `\x1b[` is treated as a
+  pending kitty-negotiation prefix, so the remainder falls through into the
+  input box as raw text (reproduced: split-injected `\x1b[<35;10;20M` typed
+  `[<35;10;20M` into the editor, 5/5 times; pi-tui's own knob
+  `PI_TUI_ESC_TIMEOUT` fixes the assembly). The front door sets
+  `PI_TUI_ESC_TIMEOUT=150` (unless the operator already tuned it), verified:
+  0/5 leaked, ESC-key handling unchanged, and the value carries into the
+  /resume re-launch via the inherited environment.
 - **Terminal hygiene**: while the front door is up, `console.log`/`warn`/
   `info`/`debug`/`error` are BUFFERED (capped) and restored after. Stray
   terminal writes — even to stderr, which is the raw terminal — land inside
