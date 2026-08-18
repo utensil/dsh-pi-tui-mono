@@ -444,3 +444,65 @@ test("loadNodePreloads honors --require preloads from NODE_OPTIONS (idempotent, 
     process.env.NODE_OPTIONS = prev;
   }
 });
+
+test("console buffering keeps plugin reports off the terminal while the TUI is up", async () => {
+  const { installConsoleBuffer } = await import("../lib/index.js");
+  const flushed = [];
+  const handle = installConsoleBuffer({ sink: (line) => flushed.push(line) });
+  try {
+    console.log("mount report", 42);
+    console.warn("warning line");
+    assert.equal(handle.lines.length, 2, "both lines buffered");
+    assert.ok(handle.lines[0].includes("[console.log] mount report 42"));
+    assert.ok(handle.lines[1].includes("[console.warn] warning line"));
+    assert.equal(flushed.length, 0, "nothing flushed while active");
+  } finally {
+    handle.restore();
+  }
+  console.log("after restore, console works normally");
+  handle.flush();
+  assert.equal(flushed.length, 2, "flush emits the captured lines");
+});
+
+test("mermaid rendering mode resolves config -> pi settings -> streaming default", () => {
+  const h = harness();
+  const shim = createPiSessionShim(h.ctx, h.agent, "s", { mermaidRenderingMode: "final" });
+  assert.equal(shim.settingsManager.getMermaidRenderingMode(), "final", "config wins");
+  const plain = createPiSessionShim(h.ctx, h.agent, "s");
+  const mode = plain.settingsManager.getMermaidRenderingMode();
+  assert.ok(mode === "streaming" || mode === "off" || mode === "final", "falls back to pi settings or streaming");
+});
+
+test("modelRuntime surfaces feed the /model picker and refresh cleanly", async () => {
+  const h = harness();
+  const shim = createPiSessionShim(h.ctx, h.agent, "s", {
+    availableModels: [{ id: "model-a", provider: "deepseek-official", name: "Model A" }],
+    defaultModel: "model-a",
+  });
+  // getAvailableSnapshot feeds pi's /model dialog
+  const snapshot = shim.modelRuntime.getAvailableSnapshot();
+  assert.equal(snapshot.length, 1);
+  assert.equal(snapshot[0].id, "model-a");
+  assert.equal(snapshot[0].provider, "deepseek-official");
+  // refresh returns the pi-shaped result (regression: undefined crashed the picker)
+  const result = await shim.modelRuntime.refresh({ signal: { aborted: false } });
+  assert.equal(result.aborted, false);
+  assert.ok(result.errors instanceof Map);
+  const aborted = await shim.modelRuntime.refresh({ signal: { aborted: true } });
+  assert.equal(aborted.aborted, true);
+  // OAuth/subscription stubs answer pi's footer and /login
+  assert.equal(shim.modelRuntime.isUsingOAuth("deepseek"), false);
+  assert.equal(shim.modelRuntime.isUsingSubscription(), false);
+  assert.equal(shim.modelRegistry.getAvailable()[0].id, "model-a");
+});
+
+test("getExtensions surfaces mounted extension packages to pi's extension list", () => {
+  const h = harness();
+  const shim = createPiSessionShim(h.ctx, h.agent, "s", {
+    extensions: [{ name: "pi-test-ext", source: "dsh-pi-extensions", version: "0.0.1", path: "pi-test-ext" }],
+  });
+  const exts = shim.resourceLoader.getExtensions().extensions;
+  assert.equal(exts.length, 1);
+  assert.equal(exts[0].name, "pi-test-ext");
+  assert.equal(exts[0].source, "dsh-pi-extensions");
+});

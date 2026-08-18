@@ -82,6 +82,14 @@ pi updates flow through automatically (the bundle imports pi as a dependency):
 Escape during a turn routes to `session.agent.abort()` → dsh `agent.cancel()`,
 which clears the inbox and aborts the running phase.
 
+## Steering
+
+Pi's steer flow is bridged 1:1: `steer()` queues the message for the TUI's
+queue display (`queue_update`), routes it to the dsh agent (`agent.steer`), and
+clears the queue when the steered text is delivered as a user message.
+Verified: a steered "now continue" rendered as a user message after the tool
+step, with the queue drained.
+
 ## Slash commands
 
 - Works: `/model` (flash ⇄ pro), `/scoped-models`, `/export` (session → JSONL/HTML
@@ -197,8 +205,21 @@ Coverage per package:
 | model switch | footer state + closure model updated (regression: shadowing bug) |
 | escape interrupt | `session.agent.abort()` → `agent.cancel("interrupted")` |
 | prompt resolves | `prompt()` promise settles on `turn/end` |
+| quiet startup | `getQuietStartup`/`getCollapseChangelog` suppress pi branding |
+| /export | `exportToJsonl` writes the dsh session events to a file |
+| /name | `setSessionName` appends a `session/title` event; `getSessionName` returns it |
+| unsupported operations | `/new`, `/import`, … reject with descriptive messages |
+| steering (queue) | `queue_update` emitted; message routed to `agent.steer` |
+| steering (delivery) | steered text renders as a user message after the tool step; queue drained |
 | theme inheritance | migrated `themesDir` + bundle `theme` override the live pi home |
-| neutral model fallback | `agent.options.model` used when no config supplied |
+| AGENTS.md bootstrap | injected via the `system-prompt/assemble` hook |
+| AGENTS.md braces | `{{…}}` escaped (dsh interpolate throws on unknown refs) |
+| fullscreen settings | `tuiMode`/`fullscreenExitOutput` flow from config (neutral) |
+| mermaid mode | `getMermaidRenderingMode` resolves config → pi settings → streaming |
+| modelRuntime surfaces | `getAvailableSnapshot` feeds /model; `refresh` returns pi shape; OAuth/sub stubs |
+| getExtensions | mounted extension packages surface in pi's extension list |
+| node preloads | `loadNodePreloads` honors `--require` (module-cache idempotent, fail-safe) |
+| console buffering | plugin `console.*` reports buffered, never the terminal, flushed on restore |
 
 ### packages/extensions (test/extensions.test.js)
 
@@ -213,8 +234,9 @@ Coverage per package:
 
 | Test | Guards |
 |---|---|
-| readPiHome | settings, themes, npm + file extensions read neutrally |
-| planMigration | pi provider → dsh route, notes for install + standalone files |
+| readPiHome | settings (incl. tuiMode/fullscreenExitOutput/markdown.mermaid), themes, npm + file extensions, preloads read neutrally |
+| detectPreloads | generic `*preload*` js files found, name-agnostic |
+| planMigration | pi provider → dsh route; TUI settings + preloads carried; notes for install + standalone files |
 | renderProfilePatch | id-targeted rows, no hardcoded values, no stale shim wording |
 | applyMigration | dry-run writes nothing; apply writes themes + patch; install commands |
 | missing profile | refuses with an explicit error |

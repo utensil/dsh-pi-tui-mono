@@ -68,23 +68,42 @@ export const Config = z.object({
   mermaidRenderingMode: z.string(),
 });
 
+/** Install a console-output buffer: while the front door is up, stray writes
+ * (even to stderr — the raw terminal) land inside the TUI's input box, so
+ * console.log/warn/info/debug/error are captured instead. Returns the control
+ * handle; call restore() when the TUI stops and flush() to emit the captured
+ * lines (e.g. synchronously, so process.exit cannot drop them).
+ * @param sink - where flush() writes (default: fd 2). */
+export function installConsoleBuffer({ sink = (line) => writeSync(2, `${line}\n`), limit = 500 } = {}) {
+  const lines = [];
+  const levels = ["log", "warn", "info", "debug", "error"];
+  const originals = levels.map((level) => [level, console[level]]);
+  for (const [level] of originals) {
+    console[level] = (...args) => {
+      lines.push(`[console.${level}] ${args.map(String).join(" ")}`);
+      if (lines.length > limit) lines.shift();
+    };
+  }
+  return {
+    lines,
+    restore: () => {
+      for (const [level, original] of originals) console[level] = original;
+    },
+    flush: () => {
+      for (const line of lines) sink(line);
+    },
+  };
+}
+
 export const apply = async (ctx, config) => {
   // The TUI owns the terminal exclusively once InteractiveMode takes the
   // screen: any stray write — even to stderr, which is the raw terminal — lands
   // inside the input box wherever the cursor happens to be. Plugin reports that
   // deliberately use console.log/warn (pi2dsh's mount messages) are therefore
-  // BUFFERED while the front door is up and flushed to stderr on dispose, so
-  // the information is kept without corrupting the TUI. (Node's own crash
-  // traces bypass console.* and stay visible.)
-  const consoleBuffer = [];
-  const consoleRedirects = ["log", "warn", "info", "debug", "error"].map((level) => {
-    const original = console[level];
-    console[level] = (...args) => {
-      consoleBuffer.push(`[console.${level}] ${args.map(String).join(" ")}`);
-      if (consoleBuffer.length > 500) consoleBuffer.shift();
-    };
-    return [level, original];
-  });
+  // BUFFERED while the front door is up and flushed on dispose, so the
+  // information is kept without corrupting the TUI. (Node's own crash traces
+  // bypass console.* and stay visible.)
+  const consoleBuffer = installConsoleBuffer();
 
   const sessionId = SessionId(config?.sessionId ?? "main");
   // Load NODE_OPTIONS --require preloads (e.g. syntax-highlighting grammars)
@@ -139,14 +158,10 @@ export const apply = async (ctx, config) => {
   ctx.on("dispose", () => {
     if (running) mode.stop();
     runtimeHost.dispose();
-    for (const [level, original] of consoleRedirects) {
-      console[level] = original;
-    }
+    consoleBuffer.restore();
     // Synchronous fd write: pi's quit path calls process.exit(0), which would
     // drop buffered async stderr writes — the mount reports must survive.
-    if (consoleBuffer.length > 0) {
-      writeSync(2, `${consoleBuffer.join("\n")}\n`);
-    }
+    consoleBuffer.flush();
   });
 
   await runPromise;
