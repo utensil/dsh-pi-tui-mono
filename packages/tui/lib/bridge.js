@@ -28,16 +28,6 @@ import { zstdDecompressSync } from "node:zlib";
 const textBlocks = (content) =>
   (content ?? []).filter((b) => b.type === "text").map((b) => b.text).join("\n\n");
 
-/** dsh's runtime-context injections (system-prompt snapshots, skill catalogs,
- * agent instructions) carry structured fields and a signature prefix — they
- * are NOT user/extension content and must not enter the steering queue. */
-function isRuntimeContextMessage(data) {
-  if (data?.source?.kind !== "plugin") return false;
-  if (data.source.form === "snapshot" || data.source.form === "catalog" || data.source.form === "instructions") return true;
-  const text = textBlocks(data?.content);
-  return typeof text === "string" && /^Current runtime context|^<system-reminder>|^A skill is a reusable|workspace instructions may b/i.test(text);
-}
-
 /** The dsh resume command printed at TUI exit (pi's own formatResumeCommand
  * cannot run: our shim reports sessions as non-persisted, and pi's generated
  * command would say `pi --session ...`). */
@@ -380,6 +370,24 @@ export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
       })
     : () => {};
 
+  // The steering queue mirrors pi's session queue: ANY caller of the dsh
+  // agent's steer — the shim's own session.steer, pi2dsh's session bridge
+  // (extension steers), or a direct agent.steer — must feed the TUI's pending
+  // display. Wrapping the agent's steer is the deterministic seam (no event
+  // sniffing): every steer queues + emits queue_update, deduped.
+  const queueSteer = (text) => {
+    if (typeof text === "string" && text.trim() && !steeringMessages.includes(text)) {
+      steeringMessages.push(text);
+      emit({ type: "queue_update" });
+    }
+  };
+  if (typeof agent.steer === "function") {
+    const originalSteer = agent.steer.bind(agent);
+    agent.steer = (message) => {
+      queueSteer(textBlocks(typeof message === "string" ? [{ type: "text", text: message }] : message?.content));
+      return originalSteer(message);
+    };
+  }
   let sessionName = "";
   // Seed the /resume picker's session list from dsh's own storage (never
   // pi's), including the current session so it can be resumed by id.
@@ -465,15 +473,14 @@ export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
         // pi2dsh's session.steer) is real content, not runtime context — show
         // it in pi's pending display (Steering: <msg> + the dequeue hint) so
         // extension steers present exactly like pi.
-        if (sourceKind === "plugin" && !isRuntimeContextMessage(event.data)) {
+        // A plugin-delivered message whose text matches a pending steer is the
+        // steer's delivery: pi shows it in the pending display AND as a user
+        // turn in the conversation once the agent claims it. Anything else
+        // with a non-user source (dsh's runtime-context snapshots, skill
+        // catalogs, instructions, notifications) stays filtered.
+        if (sourceKind === "plugin") {
           const steeredText = textBlocks(event.data?.content);
-          if (steeredText) {
-            if (!steeringMessages.includes(steeredText)) {
-              steeringMessages.push(steeredText);
-              emit({ type: "queue_update" });
-            }
-            // pi shows the steered message in the pending display AND as a
-            // user turn in the conversation once the agent claims it.
+          if (steeredText && steeringMessages.includes(steeredText)) {
             emit({
               type: "message_start",
               message: { role: "user", content: [{ type: "text", text: steeredText }], timestamp: Date.now() },
@@ -793,8 +800,7 @@ export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
       if (typeof text !== "string" || !text.trim()) return;
       // Mirror pi's session.steer: queue the message for the TUI display,
       // emit queue_update, then inject it into the active turn.
-      steeringMessages.push(text);
-      emit({ type: "queue_update" });
+      queueSteer(text);
       try {
         agent.steer(createUserMessage({ content: [{ type: "text", text }], source: { kind: "user" } }));
       } catch (err) {

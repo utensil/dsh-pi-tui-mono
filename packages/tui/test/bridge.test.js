@@ -793,25 +793,30 @@ test("getFollowUpMessages is a benign empty list", () => {
   assert.deepEqual(h.shim.getFollowUpMessages(), []);
 });
 
-test("plugin-delivered steers (pi2dsh session.steer) surface in the pending display and the chat, not as runtime context", () => {
+test("steers from ANY caller (pi2dsh's session.steer goes through the wrapped agent.steer) queue for the display + render in the chat", () => {
   const h = harness();
-  const plug = (text, extra = {}) => h.dsh({
+  const delivery = (text, extra = {}) => h.dsh({
     type: "user/message",
     data: { content: [{ type: "text", text }], source: { kind: "plugin", plugin: "pi2dsh:pi-subagents", ...extra } },
   });
-  // a real steer: plain text, plugin source
-  plug("now continue the analysis");
-  assert.deepEqual(h.shim.getSteeringMessages(), ["now continue the analysis"], "steer queued for the pending display");
+  // pi2dsh's session.steer calls the dsh agent's steer; the shim wraps it so
+  // the queue is fed deterministically (no event sniffing).
+  h.agent.steer({ content: [{ type: "text", text: "now continue the analysis" }] });
+  assert.deepEqual(h.shim.getSteeringMessages(), ["now continue the analysis"], "steer queued at the agent.steer seam");
+  assert.ok(h.emitted.some((e) => e.type === "queue_update"), "queue_update emitted");
+  // the delivery arrives with a plugin source; its text matches the pending
+  // steer -> rendered as a user turn in the chat
+  delivery("now continue the analysis");
   assert.ok(
     h.emitted.some((e) => e.type === "message_start" && e.message?.role === "user" && e.message?.content?.[0]?.text === "now continue the analysis"),
-    "steer rendered as a user turn in the chat",
+    "delivered steer rendered as a user turn in the chat",
   );
-  // runtime context (snapshot/signature) is NOT treated as a steer
+  // runtime context / notifications are NOT queued (no agent.steer call) and
+  // not rendered (no pending-steer match)
   const before = h.emitted.length;
-  plug("Current runtime context. This snapshot supersedes earlier runtime-context snapshots.", { form: "snapshot", sections: [{ name: "x", text: "y" }] });
+  delivery("Current runtime context. This snapshot supersedes earlier runtime-context snapshots.", { form: "snapshot", sections: [{ name: "x", text: "y" }] });
   assert.deepEqual(h.shim.getSteeringMessages(), ["now continue the analysis"], "runtime context not queued");
   assert.equal(h.emitted.length, before, "runtime context not rendered");
-  // skill catalog / instructions likewise excluded
-  plug("<system-reminder>\nA skill is a reusable set of task-specific instructions", { form: "catalog", entries: [] });
+  delivery("<system-reminder>\nA skill is a reusable set of task-specific instructions", { form: "catalog", entries: [] });
   assert.deepEqual(h.shim.getSteeringMessages(), ["now continue the analysis"], "catalog not queued");
 });
