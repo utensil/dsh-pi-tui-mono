@@ -341,6 +341,7 @@ export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
   const cwd = dshSession?.header?.cwd ?? process.cwd();
   const listeners = new Set();
   const pendingPrompts = [];
+  const ownInput = new Set(); // texts submitted by THIS front door (typed), not external steers
   const toolCalls = new Map(); // callId -> { name, arguments }
   // Live agent-state flags pi-tui's escape handling gates on: Esc aborts the
   // running turn only when isStreaming/isBashRunning are true (the previous
@@ -455,9 +456,28 @@ export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
         emit({ type: "agent_start" });
         break;
       }
+      case "agent/inbox/spliced": {
+        // External deliveries (e.g. cc-connect's busy_behavior=steer) splice
+        // into the dsh agent's inbox as user-sourced messages. They may never
+        // be claimed into a user/message turn, so surface them in pi's pending
+        // display (Steering: <msg> + the dequeue hint) — but NOT the front
+        // door's own typed input (tracked via prompt()).
+        const spliced = event.data?.inserted ?? [];
+        for (const message of spliced) {
+          const text = textBlocks(message?.content);
+          if (!text || message?.source?.kind !== "user") continue;
+          if (ownInput.has(text.trim())) {
+            ownInput.delete(text.trim());
+            continue;
+          }
+          queueSteer(text);
+        }
+        break;
+      }
       case "user/message": {
         // A delivered user turn clears pending steering entries (pi splices
         // _steeringMessages when the agent claims the message).
+        ownInput.delete(textBlocks(event.data?.content).trim());
         if (steeringMessages.length > 0 && event.data?.source?.kind === "user") {
           const text = textBlocks(event.data?.content);
           // A steered message stays displayed (Steering: <msg> + the dequeue
@@ -786,6 +806,9 @@ export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
           content.push({ type: "image", data: img.data ?? "", mimeType: img.mimeType ?? "image/png" });
         }
       }
+      // Typed input: remember it so its own inbox splice is not mistaken for
+      // an external steer (cc-connect-style) in the pending display.
+      ownInput.add(text.trim());
       return new Promise((resolve) => {
         pendingPrompts.push(resolve);
         try {

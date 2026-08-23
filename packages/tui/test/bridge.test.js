@@ -820,3 +820,30 @@ test("steers from ANY caller (pi2dsh's session.steer goes through the wrapped ag
   delivery("<system-reminder>\nA skill is a reusable set of task-specific instructions", { form: "catalog", entries: [] });
   assert.deepEqual(h.shim.getSteeringMessages(), ["now continue the analysis"], "catalog not queued");
 });
+
+test("external inbox splices (cc-connect-style steers) surface in the pending display; typed input does not", () => {
+  const h = harness();
+  const splice = (text) => h.dsh({
+    type: "agent/inbox/spliced",
+    data: { target: "next-turn", start: 0, inserted: [{ content: [{ type: "text", text }], source: { kind: "user" }, role: "user", id: "ext-1" }] },
+  });
+  // an EXTERNAL steer (never typed in this front door) -> pending display
+  splice("but don't touch it");
+  assert.deepEqual(h.shim.getSteeringMessages(), ["but don't touch it"], "external splice queued for the pending display");
+  assert.ok(h.emitted.some((e) => e.type === "queue_update"), "queue_update emitted");
+  // when the agent claims it, the matching user/message keeps it through the turn + renders
+  h.dsh({ type: "turn/start", data: { turn: 1 } });
+  h.dsh({ type: "user/message", data: { content: [{ type: "text", text: "but don't touch it" }], source: { kind: "user" } } });
+  assert.deepEqual(h.shim.getSteeringMessages(), ["but don't touch it"], "claimed steer stays displayed through the turn");
+  assert.ok(
+    h.emitted.some((e) => e.type === "message_start" && e.message?.role === "user" && e.message?.content?.[0]?.text === "but don't touch it"),
+    "claimed steer rendered in the chat",
+  );
+  h.dsh({ type: "turn/end", data: { turn: 1, reason: { kind: "completed" } } });
+  assert.deepEqual(h.shim.getSteeringMessages(), [], "queue cleared at turn/end");
+  // a TYPED message: prompt() marks it as own input, so its splice is not a steer
+  const before = h.emitted.length;
+  h.shim.prompt("my typed question");
+  splice("my typed question");
+  assert.deepEqual(h.shim.getSteeringMessages(), [], "typed input not queued as a steer");
+});
