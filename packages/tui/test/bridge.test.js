@@ -237,10 +237,30 @@ test("model switch applies deepseek-official override and updates footer state",
   assert.equal(h.shim.model.id, "deepseek-v4-pro");
 });
 
-test("escape interrupt routes session.agent.abort to dsh cancel", () => {
+test("escape interrupt: live isStreaming/isBashRunning gate pi-tui's abort, and an aborted turn ends with stopReason aborted", () => {
   const h = harness();
-  h.shim.agent.abort();
+  assert.equal(h.shim.isStreaming, false, "idle before the turn");
+  assert.equal(h.shim.isBashRunning, false);
+  // turn 1: a bash tool call flips isBashRunning
+  h.dsh({ type: "turn/start", data: { turn: 1 } });
+  h.dsh({ type: "assistant/message", data: { message: { content: [{ type: "tool-call", id: "c1", name: "bash", arguments: "{}" }] } } });
+  h.dsh({ type: "tool/call", data: { callId: "c1", name: "bash", arguments: "{}" } });
+  assert.equal(h.shim.isBashRunning, true, "bash running while the tool executes");
+  h.dsh({ type: "tool/result", data: { message: { source: { callId: "c1" }, content: [{ type: "tool-result", content: [{ type: "text", text: "done" }] }] } } });
+  assert.equal(h.shim.isBashRunning, false, "bash cleared on the tool result");
+  h.dsh({ type: "turn/end", data: { turn: 1, reason: { kind: "completed" } } });
+  // turn 2: stream a reply, then Esc aborts it mid-stream
+  h.dsh({ type: "turn/start", data: { turn: 2 } });
+  h.dsh(reasonChunk("thinking hard"));
+  assert.equal(h.shim.isStreaming, true, "isStreaming true during the turn (pi-tui's escape handler aborts only then)");
+  h.dsh(textChunk("partial answer"));
+  h.shim.agent.abort(); // Esc -> session.agent.abort() -> dsh cancel
   assert.deepEqual(h.cancels, ["interrupted"]);
+  // the aborted turn ends with reason.kind aborted -> the settled message carries stopReason "aborted"
+  h.dsh({ type: "turn/end", data: { turn: 2, reason: { kind: "aborted" } } });
+  assert.equal(h.shim.isStreaming, false, "idle after the turn");
+  const end = h.emitted.findLast((e) => e.type === "message_end");
+  assert.equal(end.message.stopReason, "aborted", "aborted stopReason so pi-tui shows Operation aborted");
 });
 
 test("prompt resolves on turn/end", async () => {
@@ -771,4 +791,27 @@ test("switchSession propagates a failed in-process resume (the TUI shows 'Failed
 test("getFollowUpMessages is a benign empty list", () => {
   const h = harness();
   assert.deepEqual(h.shim.getFollowUpMessages(), []);
+});
+
+test("plugin-delivered steers (pi2dsh session.steer) surface in the pending display and the chat, not as runtime context", () => {
+  const h = harness();
+  const plug = (text, extra = {}) => h.dsh({
+    type: "user/message",
+    data: { content: [{ type: "text", text }], source: { kind: "plugin", plugin: "pi2dsh:pi-subagents", ...extra } },
+  });
+  // a real steer: plain text, plugin source
+  plug("now continue the analysis");
+  assert.deepEqual(h.shim.getSteeringMessages(), ["now continue the analysis"], "steer queued for the pending display");
+  assert.ok(
+    h.emitted.some((e) => e.type === "message_start" && e.message?.role === "user" && e.message?.content?.[0]?.text === "now continue the analysis"),
+    "steer rendered as a user turn in the chat",
+  );
+  // runtime context (snapshot/signature) is NOT treated as a steer
+  const before = h.emitted.length;
+  plug("Current runtime context. This snapshot supersedes earlier runtime-context snapshots.", { form: "snapshot", sections: [{ name: "x", text: "y" }] });
+  assert.deepEqual(h.shim.getSteeringMessages(), ["now continue the analysis"], "runtime context not queued");
+  assert.equal(h.emitted.length, before, "runtime context not rendered");
+  // skill catalog / instructions likewise excluded
+  plug("<system-reminder>\nA skill is a reusable set of task-specific instructions", { form: "catalog", entries: [] });
+  assert.deepEqual(h.shim.getSteeringMessages(), ["now continue the analysis"], "catalog not queued");
 });

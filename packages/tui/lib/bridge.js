@@ -28,6 +28,16 @@ import { zstdDecompressSync } from "node:zlib";
 const textBlocks = (content) =>
   (content ?? []).filter((b) => b.type === "text").map((b) => b.text).join("\n\n");
 
+/** dsh's runtime-context injections (system-prompt snapshots, skill catalogs,
+ * agent instructions) carry structured fields and a signature prefix — they
+ * are NOT user/extension content and must not enter the steering queue. */
+function isRuntimeContextMessage(data) {
+  if (data?.source?.kind !== "plugin") return false;
+  if (data.source.form === "snapshot" || data.source.form === "catalog" || data.source.form === "instructions") return true;
+  const text = textBlocks(data?.content);
+  return typeof text === "string" && /^Current runtime context|^<system-reminder>|^A skill is a reusable|workspace instructions may b/i.test(text);
+}
+
 /** The dsh resume command printed at TUI exit (pi's own formatResumeCommand
  * cannot run: our shim reports sessions as non-persisted, and pi's generated
  * command would say `pi --session ...`). */
@@ -342,6 +352,11 @@ export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
   const listeners = new Set();
   const pendingPrompts = [];
   const toolCalls = new Map(); // callId -> { name, arguments }
+  // Live agent-state flags pi-tui's escape handling gates on: Esc aborts the
+  // running turn only when isStreaming/isBashRunning are true (the previous
+  // static false made the escape handler fall through and do nothing).
+  let turnActive = false;
+  let bashRunning = false;
   let model = resolvedDefaultModel;
 
   // Bootstrap: inherit pi's AGENTS.md/CLAUDE.md (global + project) into the
@@ -424,6 +439,7 @@ export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
     if (subject !== dshSession) return;
     switch (event.type) {
       case "turn/start": {
+        turnActive = true;
         streamingText = "";
         streamingThinking = "";
         assistantStarted = false;
@@ -444,10 +460,30 @@ export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
             emit({ type: "queue_update" });
           }
         }
+        const sourceKind = event.data?.source?.kind;
+        // A PLUGIN-delivered plain-text message (e.g. an extension steer via
+        // pi2dsh's session.steer) is real content, not runtime context — show
+        // it in pi's pending display (Steering: <msg> + the dequeue hint) so
+        // extension steers present exactly like pi.
+        if (sourceKind === "plugin" && !isRuntimeContextMessage(event.data)) {
+          const steeredText = textBlocks(event.data?.content);
+          if (steeredText) {
+            if (!steeringMessages.includes(steeredText)) {
+              steeringMessages.push(steeredText);
+              emit({ type: "queue_update" });
+            }
+            // pi shows the steered message in the pending display AND as a
+            // user turn in the conversation once the agent claims it.
+            emit({
+              type: "message_start",
+              message: { role: "user", content: [{ type: "text", text: steeredText }], timestamp: Date.now() },
+            });
+          }
+          break;
+        }
         // Render only genuine user turns. dsh injects runtime context (system
         // prompt, skill catalog, project files) as user/message events; those
         // have a non-"user" source and would flood the transcript.
-        const sourceKind = event.data?.source?.kind;
         if (sourceKind !== "user" && sourceKind !== undefined) break;
         if (sourceKind === undefined && !event.data?.message?.source?.callId) break;
         const text = textBlocks(event.data?.content);
@@ -498,6 +534,7 @@ export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
           try { args = JSON.parse(args); } catch { args = {}; }
         }
         toolCalls.set(callId, { name, arguments: args, startedAt: Date.now() });
+        if (name === "bash" || name === "bash_persistent") bashRunning = true;
         // The step's assistant message (with the toolCall block) already
         // settled via assistant/message. Emit only the execution card so the
         // card renders right after that message, before any post-tool text.
@@ -522,6 +559,7 @@ export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
           });
 
           toolCalls.delete(callId);
+          if (call?.name === "bash" || call?.name === "bash_persistent") bashRunning = false;
         }
         break;
       }
@@ -546,6 +584,12 @@ export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
         break;
       }
       case "turn/end": {
+        turnActive = false;
+        bashRunning = false;
+        // An Esc abort surfaces as turn/end with reason.kind "aborted"; pi-tui
+        // renders "Operation aborted" on a message_end whose stopReason is
+        // "aborted" — mirror that.
+        const aborted = event.data?.reason?.kind === "aborted";
         // The turn consumed any delivered steers; drop the queue display.
         if (steeringMessages.length > 0) {
           steeringMessages = [];
@@ -562,7 +606,7 @@ export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
           }
           emit({
             type: "message_end",
-            message: assistantMessage(model, finalContent),
+            message: assistantMessage(model, finalContent, aborted ? { stopReason: "aborted" } : {}),
           });
           assistantStarted = false;
         }
@@ -706,8 +750,12 @@ export function createPiSessionShim(ctx, agent, sessionId, options = {}) {
       getAppendSystemPromptSources: () => [],
     },
     state: stateRef,
-    isStreaming: false,
-    isBashRunning: false,
+    get isStreaming() {
+      return turnActive;
+    },
+    get isBashRunning() {
+      return bashRunning;
+    },
     isCompacting: false,
     steeringMode: "steer",
     thinkingLevel: "high",
