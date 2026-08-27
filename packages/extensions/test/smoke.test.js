@@ -11,7 +11,7 @@ import ToolRuntime from "@deepseek-ai/dsh-tools";
 import CommandRuntime from "@deepseek-ai/dsh-commands";
 import * as SkillRegistry from "@deepseek-ai/dsh-skill-filesystem";
 import AgentRegistry from "@deepseek-ai/dsh-agent";
-import { applyPiHost } from "pi2dsh";
+import { applyPiHost, resolvePiPackage, analyzePackage } from "pi2dsh";
 
 /** The short list is the SAME set of pi extensions installed on the reference
  * device (~/.pi/agent/npm/node_modules). CI installs these exact packages as
@@ -55,7 +55,7 @@ async function mountExtension(dir) {
 }
 
 for (const name of SMOKE_LIST) {
-  test(`smoke: ${name} loads and registers through the adapter`, async (t) => {
+  test(`smoke: ${name} loads + registers + has no FATAL interface gaps`, async (t) => {
     const resolved = resolveExtensionDir(name);
     if (resolved === undefined) {
       // In CI the packages are devDependencies; locally the pi install may be
@@ -72,5 +72,18 @@ for (const name of SMOKE_LIST) {
       assert.fail(`${name} failed to mount: ${err.message}`);
     }
     assert.ok(ctx, `${name} mounted`);
+    // Static ABI analysis: no FATAL interface usage (surfaces pi2dsh cannot
+    // serve at all would break at runtime; 'partial'/'unsupported' are the
+    // documented degradation status and are recorded, not failed).
+    const pkg = await resolvePiPackage(resolved.dir);
+    const report = await analyzePackage(pkg);
+    t.diagnostic(
+      `${name} verdict=${report.verdict} full=${report.summary.full} ` +
+      `partial=${report.summary.partial} unsupported=${report.summary.unsupported} fatal=${report.summary.fatal}`,
+    );
+    assert.equal(report.summary.fatal, 0, `${name}: no FATAL interface gaps`);
+    if (report.summary.unsupported > 0) {
+      t.diagnostic(`${name}: ${report.summary.unsupported} unsupported surface(s) — runtime behavior there is degraded by design (pi2dsh limits)`);
+    }
   });
 }

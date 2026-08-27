@@ -42,6 +42,7 @@
     "@deepseek-ai/dsh-attachment": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-credentials": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-subprocess": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-user-questions": "^0.1.0-rc.6"
+    "@deepseek-ai/dsh-user-questions": "^0.1.0-rc.6",
+    "typescript": "^5.0.0"
   }
 }

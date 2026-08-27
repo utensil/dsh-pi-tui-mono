@@ -26,8 +26,10 @@ jobs:
       # Unit + regression suite: no model interaction anywhere in these tests.
       - run: pnpm test
 
-      # Extension smoke: the SAME short list as the reference device's pi
-      # install (~/.pi/agent/npm/node_modules) — each package must load and
-      # register through the adapter. The packages are devDependencies, so
-      # resolveExtensionDir() finds them in node_modules in CI.
+      # Extension smoke + dispatch: the SAME short list as the reference
+      # device's pi install — each package must load, register, pass the
+      # static ABI analysis (no FATAL interface gaps), and have its event
+      # handlers run through the adapter without failures. The packages are
+      # devDependencies, so resolveExtensionDir() finds them in node_modules.
       - run: node --test packages/extensions/test/smoke.test.js
+      - run: node --test packages/extensions/test/dispatch.test.js
